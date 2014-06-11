@@ -738,6 +738,7 @@ class EmailMessageComposeBaseView(AttachmentFormSetViewMixin, EmailBaseView, For
             server = IMAP(host, port, ssl)
             if server.login(account.username, account.password):
                 account.auth_ok = OK_EMAILACCOUNT_AUTH
+                account.save()
 
                 # Prepare an instance of EmailMultiAlternatives or EmailMultiRelated
                 if 'submit-save' in self.request.POST or 'submit-send' in self.request.POST:
@@ -820,7 +821,11 @@ class EmailMessageComposeBaseView(AttachmentFormSetViewMixin, EmailBaseView, For
                 imap_logger.info('IMAP login failed for %s', account.email.email_address)
                 if server._login_failed_reason != CATCH_LOGIN_ERRORS[1]:
                     account.auth_ok = NO_EMAILACCOUNT_AUTH
-            account.save()
+                    account.save()
+
+                # TODO: should be a form error ? That would return the form's content at least.
+                messages.warning(self.request, _('Failed to save draft. Cannot login for %s') % account.email.email_address)
+                return redirect(self.request.META.get('HTTP_REFERER', 'messaging_email_compose'))
         except Exception, e:
             log.error(traceback.format_exc(e))
         finally:
