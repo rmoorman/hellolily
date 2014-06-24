@@ -22,6 +22,8 @@ def extract_tags_from_soup(soup, tags):
     for element in soup.findAll(tags):
         element.extract()
 
+    return soup
+
 
 def convert_br_to_newline(soup, newline='\n'):
     """
@@ -29,6 +31,8 @@ def convert_br_to_newline(soup, newline='\n'):
     """
     for linebreak in soup.findAll('br'):
         linebreak.replaceWith(newline)
+
+    return soup
 
 
 def convert_links_to_text(soup):
@@ -49,6 +53,8 @@ def convert_links_to_text(soup):
         text = '%s <%s>' % (link.text, link['href'])
         link.replaceWith(text)
 
+    return soup
+
 
 def convert_html_to_text(html, keep_linebreaks=False):
     """
@@ -62,7 +68,7 @@ def convert_html_to_text(html, keep_linebreaks=False):
     soup = BeautifulSoup(html)
 
     # replace links with plain text, so that no info get lost
-    convert_links_to_text(soup)
+    soup = convert_links_to_text(soup)
 
     # Remove doctype and html comments to prevent these from being included in
     # the plain text version
@@ -80,10 +86,10 @@ def convert_html_to_text(html, keep_linebreaks=False):
         'style',
         'video'
     ]
-    extract_tags_from_soup(soup, tags)
+    soup = extract_tags_from_soup(soup, tags)
 
     # Replace html breaks with newline or spaces
-    convert_br_to_newline(soup, '\n' if keep_linebreaks else ' ')
+    soup = convert_br_to_newline(soup, '\n' if keep_linebreaks else ' ')
 
     # Return text version of body without keeping whitespace
     body = soup.body if soup.body else soup
@@ -165,10 +171,27 @@ def parse_search_keys(search_string):
     return criteria
 
 
+preferred_types_map = {
+    'text/plain': '.txt',
+    'text/html': '.html',
+}
+
+
 def get_extensions_for_type(general_type):
+    # For known mimetypes, use some extensions we know to be good or we prefer
+    # above others.. This solves some issues when the first of the available
+    # extensions doesn't make any sense, e.g.
+    # >>> get_extensions_for_type('txt')
+    # 'asc'
+    if general_type in preferred_types_map:
+        yield preferred_types_map[general_type]
+
     if not mimetypes.inited:
         mimetypes.init()
 
     for ext in mimetypes.types_map:
         if mimetypes.types_map[ext] == general_type or mimetypes.types_map[ext].split('/')[0] == general_type:
             yield ext
+
+    # return at least an extension for unknown mimetypes
+    yield '.bak'

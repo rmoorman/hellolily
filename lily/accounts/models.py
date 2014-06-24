@@ -64,6 +64,25 @@ class Account(Common, TaggedObjectMixin, CaseClientModelMixin):
                 return email
         return None
 
+    def get_any_email_address(self):
+        """
+        Will return any email address set to this account if one exists.
+
+        Check if there is a primary email address, if none are found,
+        grab the first of the email address set.
+
+        Returns:
+            EmailAddress or None.
+        """
+        if not hasattr(self, '_any_email_address'):
+            self._any_email_address = self.primary_email()
+            if self._any_email_address is None:
+                try:
+                    self._any_email_address = self.email_addresses.all()[0]
+                except IndexError:
+                    pass
+        return self._any_email_address
+
     def get_work_phone(self):
         for phone in self.phone_numbers.all():
             if phone.type == 'work':
@@ -113,6 +132,14 @@ class Account(Common, TaggedObjectMixin, CaseClientModelMixin):
 
     def get_visiting_addresses(self):
         return self.get_addresses(type='visiting')
+
+    def get_main_address(self):
+        addresses = self.get_addresses(type='visiting')
+
+        if len(addresses):
+            return addresses[0]
+        else:
+            return None
 
     def get_other_addresses(self):
         return self.get_addresses(type='other')

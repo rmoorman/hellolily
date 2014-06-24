@@ -2,7 +2,7 @@
 ### Base & Server                                   ###
 #######################################################
 
-Django>1.4.5,<1.5
+Django>=1.6,<1.7
 django-extensions>=0.9
 
 gevent>=0.13.7
@@ -42,7 +42,7 @@ django-activelink>=0.3
 
 django-extra-views>=0.2.5
 
-django-bootstrap3
+django-bootstrap3==2.5.2
 django-bootstrap3-datetimepicker
 django-fields>=0.2.2
 django-formset-js>=0.4.0
@@ -73,6 +73,7 @@ kombu>=3.0.9
 IMAPClient>=0.10.2
 beautifulsoup4>=4.3.1
 lxml==3.2.3
+eventlet>=0.14.0
 
 #######################################################
 ### Random                                          ###
@@ -82,6 +83,8 @@ ordereddict>=1.1
 pycrypto>=2.6
 anyjson>=0.3.3
 unicodecsv>=0.9.4
+psutil>=2.1.1
+Pympler>=0.3.1
 
 newrelic>=1.2.1.265
 django-newrelic-extensions>=0.0.1

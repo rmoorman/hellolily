@@ -1,9 +1,10 @@
+import base64
+import pickle
 from datetime import date
 from hashlib import sha256
 from urlparse import urlparse
-import base64
-import pickle
 
+import anyjson
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.urlresolvers import reverse
@@ -12,7 +13,6 @@ from django.http import Http404, HttpResponse
 from django.shortcuts import redirect
 from django.template.context import RequestContext
 from django.template.loader import render_to_string
-from django.utils import simplejson
 from django.utils.datastructures import SortedDict
 from django.utils.encoding import force_unicode
 from django.utils.translation import ugettext as _
@@ -46,8 +46,8 @@ class ListContactView(ExportListViewMixin, SortedListMixin, FilteredListByTagMix
     ]
 
     # SortedlistMixin
-    sortable = [2, 4, 5, 6]
-    default_order_by = 2
+    sortable = [1, 3, 4, 5]
+    default_order_by = 1
 
     # DataTablesListView
     columns = SortedDict([
@@ -157,7 +157,7 @@ class ListContactView(ExportListViewMixin, SortedListMixin, FilteredListByTagMix
         """
         Used by ExportListViewMixin.
         """
-        return contact.primary_email()
+        return contact.get_any_email_address()
 
     def value_for_column_work_phone(self, contact):
         """
@@ -245,6 +245,24 @@ class CreateUpdateContactView(PhoneNumberFormSetViewMixin, AddressFormSetViewMix
 
         return super(CreateUpdateContactView, self).form_valid(form)
 
+    def get_context_data(self, **kwargs):
+        """
+        Provide a url to go back to.
+        """
+        kwargs = super(CreateUpdateContactView, self).get_context_data(**kwargs)
+        if not is_ajax(self.request):
+            kwargs.update({
+                'back_url': self.get_success_url(),
+            })
+
+        return kwargs
+
+    def get_success_url(self):
+        """
+        Get the url to redirect to after this form has succesfully been submitted.
+        """
+        return '%s?order_by=6&sort_order=desc' % (reverse('contact_list'))
+
 
 class AddContactView(DeleteBackAddSaveFormViewMixin, EmailAddressFormSetViewMixin, CreateUpdateContactView, CreateView):
     """
@@ -301,11 +319,11 @@ class AddContactView(DeleteBackAddSaveFormViewMixin, EmailAddressFormSetViewMixi
                 if parse_result.path in (reverse('contact_list'), reverse('dashboard')):
                     redirect_url = self.get_success_url()
 
-            response = simplejson.dumps({
+            response = anyjson.serialize({
                 'error': False,
                 'redirect_url': redirect_url
             })
-            return HttpResponse(response, mimetype='application/json')
+            return HttpResponse(response, content_type='application/json')
 
         return super(AddContactView, self).form_valid(form)
 
@@ -316,10 +334,10 @@ class AddContactView(DeleteBackAddSaveFormViewMixin, EmailAddressFormSetViewMixi
         """
         if is_ajax(self.request):
             context = RequestContext(self.request, self.get_context_data(form=form))
-            return HttpResponse(simplejson.dumps({
+            return HttpResponse(anyjson.serialize({
                 'error': True,
                 'html': render_to_string(self.template_name, context_instance=context)
-            }), mimetype='application/json')
+            }), content_type='application/json')
 
         return super(AddContactView, self).form_invalid(form)
 
@@ -327,7 +345,7 @@ class AddContactView(DeleteBackAddSaveFormViewMixin, EmailAddressFormSetViewMixi
         """
         Get the url to redirect to after this form has succesfully been submitted.
         """
-        return '%s?order_by=5&sort_order=desc' % (reverse('contact_list'))
+        return '%s?order_by=4&sort_order=desc' % (reverse('contact_list'))
 
 
 class EditContactView(DeleteBackAddSaveFormViewMixin, EmailAddressFormSetViewMixin, CreateUpdateContactView, UpdateView):
@@ -351,7 +369,7 @@ class EditContactView(DeleteBackAddSaveFormViewMixin, EmailAddressFormSetViewMix
         """
         Get the url to redirect to after this form has succesfully been submitted.
         """
-        return '%s?order_by=6&sort_order=desc' % (reverse('contact_list'))
+        return '%s?order_by=5&sort_order=desc' % (reverse('contact_list'))
 
 
 class DeleteContactView(DeleteView):
@@ -385,11 +403,11 @@ class DeleteContactView(DeleteView):
 
         redirect_url = self.get_success_url()
         if is_ajax(request):
-            response = simplejson.dumps({
+            response = anyjson.serialize({
                 'error': False,
                 'redirect_url': redirect_url
             })
-            return HttpResponse(response, mimetype='application/json')
+            return HttpResponse(response, content_type='application/json')
 
         return redirect(redirect_url)
 

@@ -2,28 +2,40 @@
 
 {% load i18n utils media %}
 
-{% block head-title %}{% trans 'Contact' %} - {{ object.full_name }}{% endblock %}
-{% block page-title %}{% trans 'Contact' %} - {{ object.full_name }}{% endblock %}
+{% block head-title %}{{ object.full_name }}{% if object.get_primary_function.account %} - {{ object.get_primary_function.account }}{% endif %}{% endblock %}
+{% block page-title %}{{ object.full_name }}{% if object.get_primary_function.account %} - {{ object.get_primary_function.account }}{% endif %}{% endblock %}
 {% block detail-title %}{{ object.subject }}{% endblock %}
 
 {% block page-actions %}
-    <li><a href="{% url contact_edit pk=object.pk %}">{% trans 'Edit' %}</a></li>
-    <li><a href="{% url contact_delete pk=object.pk %}" data-target="#confirm-delete" data-source="{% url contact_delete pk=object.pk %}">{% trans 'Delete' %}</a></li>
+    <li><a href="{% url 'contact_edit' pk=object.pk %}">{% trans 'Edit' %}</a></li>
+    <li><a href="{% url 'contact_delete' pk=object.pk %}" data-target="#confirm-delete" data-source="{% url 'contact_delete' pk=object.pk %}">{% trans 'Delete' %}</a></li>
 {% endblock %}
 
 {% block details-main %}
     <div class="row">
-        <div class="col-md-6 col-xs-6">
+        <div class="col-md-6">
             <ul class="list-unstyled summary-list">
                 <li>
-                    <span class="summary-label">{% trans 'Name' %}</span>
-                    <span class="pull-right">{{ object.full_name }}</span>
+                    <span class="summary-label">{% trans 'Phone number' %}</span>
+                    <span>{{ object.get_work_phone|default:_('Unknown') }}</span>
                 </li>
                 <li>
+                    <span class="summary-label">{% trans 'Mobile number' %}</span>
+                    <span>{{ object.get_mobile_phone|default:_('Unknown') }}</span>
+                </li>
+                <li>
+                    <span class="summary-label">{% trans 'E-mail address' %}</span>
+                    <span>{{ object.get_any_email_address|default:_('Unknown') }}</span>
+                </li>
+                <li class="summary-more-information">
+                    <span class="summary-label">{% trans 'Name' %}</span>
+                    <span>{{ object.full_name }}</span>
+                </li>
+                <li class="summary-more-information">
                     <span class="summary-label">{% trans 'Works at' %}</span>
-                    <span class="pull-right">
+                    <span>
                         {% if object.get_primary_function.account %}
-                            <a href="{% url account_details pk=object.get_primary_function.account.pk %}">
+                            <a href="{% url 'account_details' pk=object.get_primary_function.account.pk %}">
                                 {{ object.get_primary_function.account }}
                             </a>
                         {% else %}
@@ -32,18 +44,7 @@
                     </span>
                 </li>
             </ul>
-        </div>
-        <div class="col-md-6 col-xs-6">
-            <ul class="list-unstyled summary-list">
-                <li>
-                    <span class="summary-label">{% trans 'E-mail address' %}</span>
-                    <span class="pull-right">{{ object.primary_email|default:_('Unknown') }}</span>
-                </li>
-                <li>
-                    <span class="summary-label">{% trans 'Phone number' %}</span>
-                    <span class="pull-right">{{ object.get_phone_number|default:_('Unknown') }}</span>
-                </li>
-            </ul>
+            <button class="btn btn-link summary-more-information-btn pull-right">{% trans 'More information' %}</button>
         </div>
     </div>
 {% endblock %}
@@ -130,7 +131,7 @@
                 <ul class="list-unstyled summary-list small-summary-list">
                     <li>
                         <span class="summary-label">{% trans 'Title' %}</span>
-                        <span class="pull-right">{{ object.title|default:_('Unkown') }}</span>
+                        <span class="pull-right">{{ object.title|default:_('Unknown') }}</span>
                     </li>
                     <li>
                         <span class="summary-label">{% trans 'Salutation' %}</span>
@@ -150,7 +151,7 @@
                     </li>
                     <li>
                         <span class="summary-label">{% trans 'Function' %}</span>
-                        <span class="pull-right">{{ object.get_primary_function|default:_('Unkown') }}</span>
+                        <span class="pull-right">{{ object.get_primary_function|default:_('Unknown') }}</span>
                     </li>
                 </ul>
             </div>
@@ -162,7 +163,7 @@
                     {% for tag in object.tags.all %}
                         <li class="no-padding"><span class="label label-btn label-btn-sm label-btn-default">{{ tag }}</span></li>
                     {% empty %}
-                        <li class="no-padding"><a href="{% url contact_edit pk=object.pk %}#id_tags" class="btn btn-sm default">{% trans 'Click to add one' %}</a></li>
+                        <li class="no-padding"><a href="{% url 'contact_edit' pk=object.pk %}#id_tags" class="btn btn-sm default">{% trans 'Click to add one' %}</a></li>
                     {% endfor %}
                 </ul>
             </div>
@@ -172,7 +173,7 @@
                     {% for email_address in object.email_addresses.all %}
                         <li class="no-padding"><a href="#" class="btn btn-sm default">{{ email_address }}</a></li>
                     {% empty %}
-                        <li class="no-padding"><a href="{% url contact_edit pk=object.pk %}#email_addresses" class="btn btn-sm default">{% trans 'Click to add one' %}</a></li>
+                        <li class="no-padding"><a href="{% url 'contact_edit' pk=object.pk %}#email_addresses" class="btn btn-sm default">{% trans 'Click to add one' %}</a></li>
                     {% endfor %}
                 </ul>
             </div>
@@ -184,7 +185,7 @@
                     {% for phone_number in object.phone_numbers.all %}
                         <li class="no-padding"><span class="label label-btn label-btn-sm label-btn-default">{{ phone_number }}</span></li>
                     {% empty %}
-                        <li class="no-padding"><a href="{% url contact_edit pk=object.pk %}#phone_numbers" class="btn btn-sm default">{% trans 'Click to add one' %}</a></li>
+                        <li class="no-padding"><a href="{% url 'contact_edit' pk=object.pk %}#phone_numbers" class="btn btn-sm default">{% trans 'Click to add one' %}</a></li>
                     {% endfor %}
                 </ul>
             </div>
@@ -192,9 +193,21 @@
                 <h4>{% trans 'Addresses' %}</h4>
                 <ul class="list-unstyled list-inline no-margin block-list">
                     {% for address in object.addresses.all %}
-                        <li class="no-padding"><span class="label label-btn label-btn-sm label-btn-default">{{ address }}</span></li>
+                        <li class="no-padding">
+                            <span class="label label-btn label-btn-sm label-btn-default text-left">
+                            {% if address.street or address.street_number or address.complement %}
+                                {{ address }} <br/>
+                            {% endif %}
+                                {% if address.postal_code or address.city %}
+                                    {{ address.postal_code }} {{ address.city }} <br/>
+                                {% endif %}
+                                {% if address.country %}
+                                    {{ address.get_country_display }}
+                                {% endif %}
+                            </span>
+                        </li>
                     {% empty %}
-                        <li class="no-padding"><a href="{% url contact_edit pk=object.pk %}#addresses" class="btn btn-sm default">{% trans 'Click to add one' %}</a></li>
+                        <li class="no-padding"><a href="{% url 'contact_edit' pk=object.pk %}#addresses" class="btn btn-sm default">{% trans 'Click to add one' %}</a></li>
                     {% endfor %}
                 </ul>
             </div>
@@ -205,10 +218,27 @@
 {% block sidebar %}
     <div class="profile">
         <ul class="list-unstyled profile-nav">
-            <li><a href="#">E-mails <span>{{ object.get_emails|length|default:0 }}</span></a></li>
+            <li><a href="#">E-mails <span>{{ object.get_emails.count }}</span></a></li>
             <li><a href="#">Tasks <span>NaN</span></a></li>
-{#            <li><a href="#">Deals <span>{{ object.get_deals.all|length|default:0 }}</span></a></li>#}
-            <li><a href="#">Cases <span>{{ object.get_cases.all|length|default:0 }}</span></a></li>
+            <li><a href="#">Deals <span>{{ object.get_assigned_deals.count|default:0 }}</span></a></li>
+            <li><a href="#">Cases <span>{{ object.get_assigned_cases.count|default:0 }}</span></a></li>
         </ul>
     </div>
+{% endblock %}
+
+{% block scripts %}
+    {{ block.super }}
+    <script>
+        $(function($) {
+            $('.summary-more-information-btn').click(function() {
+                if($('.summary-more-information').is(':visible')) {
+                    $(this).text('{% trans 'More information' %}');
+                    $('.summary-more-information').fadeOut();
+                } else {
+                    $(this).text('{% trans 'Less information' %}');
+                    $('.summary-more-information').fadeIn();
+                }
+            });
+        });
+    </script>
 {% endblock %}

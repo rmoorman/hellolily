@@ -1,6 +1,8 @@
-from urlparse import urlparse
 import datetime
 import operator
+import anyjson
+
+from urlparse import urlparse
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -11,7 +13,6 @@ from django.http import Http404, HttpResponse
 from django.shortcuts import redirect
 from django.template.context import RequestContext
 from django.template.loader import render_to_string
-from django.utils import simplejson
 from django.utils.datastructures import SortedDict
 from django.utils.translation import ugettext as _
 from django.views.generic import CreateView, View
@@ -40,8 +41,8 @@ class ListAccountView(ExportListViewMixin, SortedListMixin, FilteredListByTagMix
     ]
 
     # SortedListMixin
-    sortable = [2, 4, 5]
-    default_order_by = 2
+    sortable = [1, 3, 4]
+    default_order_by = 1
 
     # DataTablesListView
     columns = SortedDict([
@@ -135,7 +136,7 @@ class ListAccountView(ExportListViewMixin, SortedListMixin, FilteredListByTagMix
         """
         Used by ExportListViewMixin.
         """
-        return account.primary_email()
+        return account.get_any_email_address()
 
     def value_for_column_work_phone(self, account):
         """
@@ -197,7 +198,6 @@ class DetailAccountView(HistoryListViewMixin):
             for email_address in contact.email_addresses.all():
                 extra_mail_adresses.append(email_address.email_address)
 
-
         # Expand list with email messages if possible
         if hasattr(self.object, 'email_addresses'):
             email_address_list = [x.email_address for x in self.object.email_addresses.all()]
@@ -223,7 +223,7 @@ class DetailAccountView(HistoryListViewMixin):
         object_list = object_list.distinct().order_by('-sort_by_date')
         kwargs.update({
             'object_list': object_list[:self.page_size],
-            'show_more': len(object_list) > self.page_size
+            'show_more': len(object_list) > self.page_size,
         })
 
         return kwargs
@@ -307,12 +307,6 @@ class CreateUpdateAccountView(DeleteBackAddSaveFormViewMixin, EmailAddressFormSe
 
         return kwargs
 
-    def get_success_url(self):
-        """
-        Get the url to redirect to after this form has succesfully been submitted.
-        """
-        return '%s?order_by=4&sort_order=desc' % (reverse('account_list'))
-
 
 class AddAccountView(CreateUpdateAccountView, CreateView):
     """
@@ -367,11 +361,11 @@ class AddAccountView(CreateUpdateAccountView, CreateView):
                 if parse_result.path in (reverse('account_list'), reverse('dashboard')):
                     redirect_url = self.get_success_url()
 
-            response = simplejson.dumps({
+            response = anyjson.serialize({
                 'error': False,
                 'redirect_url': redirect_url
             })
-            return HttpResponse(response, mimetype='application/json')
+            return HttpResponse(response, content_type='application/json')
 
         return super(AddAccountView, self).form_valid(form)
 
@@ -381,12 +375,18 @@ class AddAccountView(CreateUpdateAccountView, CreateView):
         """
         if is_ajax(self.request):
             context = RequestContext(self.request, self.get_context_data(form=form))
-            return HttpResponse(simplejson.dumps({
+            return HttpResponse(anyjson.serialize({
                 'error': True,
                 'html': render_to_string(self.template_name, context_instance=context)
-            }), mimetype='application/json')
+            }), content_type='application/json')
 
         return super(AddAccountView, self).form_invalid(form)
+
+    def get_success_url(self):
+        """
+        Get the url to redirect to after this form has succesfully been submitted.
+        """
+        return '%s?order_by=3&sort_order=desc' % (reverse('account_list'))
 
 
 class EditAccountView(CreateUpdateAccountView, UpdateView):
@@ -403,6 +403,12 @@ class EditAccountView(CreateUpdateAccountView, UpdateView):
         messages.success(self.request, _('%s (Account) has been edited.') % self.object.name)
 
         return success_url
+
+    def get_success_url(self):
+        """
+        Get the url to redirect to after this form has succesfully been submitted.
+        """
+        return '%s?order_by=4&sort_order=desc' % (reverse('account_list'))
 
 
 class DeleteAccountView(DeleteView):
@@ -438,11 +444,11 @@ class DeleteAccountView(DeleteView):
 
         redirect_url = self.get_success_url()
         if is_ajax(request):
-            response = simplejson.dumps({
+            response = anyjson.serialize({
                 'error': False,
                 'redirect_url': redirect_url
             })
-            return HttpResponse(response, mimetype='application/json')
+            return HttpResponse(response, content_type='application/json')
 
         return redirect(redirect_url)
 
@@ -471,10 +477,10 @@ class ExistsAccountView(View):
         else:
             raise Http404()
 
-        return HttpResponse(simplejson.dumps({
+        return HttpResponse(anyjson.serialize({
             'exists': exists,
             'edit_url': edit_url
-        }), mimetype='application/json')
+        }), content_type='application/json')
 
 
 # Perform logic here instead of in urls.py
