@@ -4,6 +4,7 @@ import logging
 import StringIO
 import traceback
 from datetime import datetime, timedelta
+from email.utils import getaddresses
 
 from Crypto import Random
 from celery import task
@@ -21,7 +22,8 @@ from imapclient import SEEN, DELETED
 from python_imap.folder import ALLMAIL, DRAFTS, TRASH, INBOX, SENT
 from python_imap.server import IMAP, CATCH_LOGIN_ERRORS
 from python_imap.utils import convert_html_to_text
-from lily.messaging.email.models import EmailAccount, EmailMessage, EmailHeader, EmailAttachment, OK_EMAILACCOUNT_AUTH, NO_EMAILACCOUNT_AUTH
+from lily.messaging.email.models import EmailAccount, EmailMessage, EmailHeader, EmailAttachment, OK_EMAILACCOUNT_AUTH, NO_EMAILACCOUNT_AUTH, \
+    EmailAddressHeader
 from lily.messaging.email.utils import get_attachment_upload_path, replace_anchors_in_html, replace_cid_in_html, get_task_count
 from lily.users.models import CustomUser
 
@@ -171,7 +173,7 @@ def retrieve_new_emails_for(emailaccount_id):
                                 emailaccount.last_sync_date = now_utc
                             else:
                                 task_logger.info('IMAP login failed for %s', emailaccount.email.email_address)
-                                if server._login_failed_reason != CATCH_LOGIN_ERRORS[1]:
+                                if not server.auth_ok:
                                     emailaccount.auth_ok = NO_EMAILACCOUNT_AUTH
                             emailaccount.save()
                         finally:
@@ -286,7 +288,7 @@ def retrieve_low_priority_emails_for(emailaccount_id):
                             synchronize_folder(emailaccount, server, server.get_folder(DRAFTS), modifiers_old=modifiers_old, modifiers_new=modifiers_new)
                         else:
                             task_logger.info('IMAP login failed for %s', emailaccount.email.email_address)
-                            if server._login_failed_reason != CATCH_LOGIN_ERRORS[1]:
+                            if not server.auth_ok:
                                 emailaccount.auth_ok = NO_EMAILACCOUNT_AUTH
                         emailaccount.save()
                     finally:
@@ -336,7 +338,7 @@ def retrieve_all_emails_for(emailaccount_id):
                         emailaccount.last_sync_date = now_utc
                     else:
                         task_logger.info('IMAP login failed for %s', emailaccount.email.email_address)
-                        if server._login_failed_reason != CATCH_LOGIN_ERRORS[1]:
+                        if not server.auth_ok:
                             emailaccount.auth_ok = NO_EMAILACCOUNT_AUTH
                     emailaccount.save()
                 finally:
@@ -420,7 +422,7 @@ def retrieve_all_flags_for(emailaccount_id):
                             synchronize_folder(emailaccount, server, folder, criteria=['ALL'], modifiers_old=modifiers_old)
                     else:
                         task_logger.warn('IMAP login failed for %s', emailaccount.email.email_address)
-                        if server._login_failed_reason != CATCH_LOGIN_ERRORS[1]:
+                        if not server.auth_ok:
                             emailaccount.auth_ok = NO_EMAILACCOUNT_AUTH
                     emailaccount.save()
                 finally:
@@ -486,7 +488,7 @@ def mark_messages(message_ids, read=True):
                             server.client.close_folder()
                 else:
                     task_logger.info('IMAP login failed for %s', account.email.email_address)
-                    if server._login_failed_reason != CATCH_LOGIN_ERRORS[1]:
+                    if not server.auth_ok:
                         account.auth_ok = NO_EMAILACCOUNT_AUTH
                 account.save()
 
@@ -547,7 +549,7 @@ def delete_messages(message_ids):
                             server.client.close_folder()
                 else:
                     task_logger.info('IMAP login failed for %s', account.email.email_address)
-                    if server._login_failed_reason != CATCH_LOGIN_ERRORS[1]:
+                    if not server.auth_ok:
                         account.auth_ok = NO_EMAILACCOUNT_AUTH
                 account.save()
             except Exception, e:
@@ -626,7 +628,7 @@ def move_messages(message_ids, target_folder_name):
                         synchronize_folder(account, server, target_folder, new_only=True)
                 else:
                     task_logger.info('IMAP login failed for %s', account.email.email_address)
-                    if server._login_failed_reason != CATCH_LOGIN_ERRORS[1]:
+                    if not server.auth_ok:
                         account.auth_ok = NO_EMAILACCOUNT_AUTH
                 account.save()
             except Exception, e:
@@ -688,6 +690,7 @@ def synchronize_folder(account, server, folder, criteria=['ALL'], modifiers_old=
     Fetch and store modifiers_old for UIDs already in the database and
     modifiers_new for UIDs that only exist remotely.
     """
+    messages_batch_size = 500
     task_logger.debug('sync start for %s', unicode(folder.get_name()))
 
     # Find already known uids
@@ -719,18 +722,20 @@ def synchronize_folder(account, server, folder, criteria=['ALL'], modifiers_old=
 
             if len(known_uids):
                 # Renew modifiers_old for known_uids, TODO; check scenario where local_uids[x] has been moved/trashed
-                folder_messages = server.get_messages(known_uids, modifiers_old, folder)
-
-                if len(folder_messages) > 0:
-                    save_email_messages(folder_messages, account, folder)
+                for i in range(0, len(known_uids), messages_batch_size):
+                    folder_messages = server.get_messages(known_uids[i:i + messages_batch_size], modifiers_old, folder)
+                    if len(folder_messages) > 0:
+                        save_email_messages(folder_messages, account, folder, new_messages=False)
+                    del folder_messages
 
         if not old_only:
             if len(new_uids):
                 # Retrieve modifiers_new for new_uids
-                folder_messages = server.get_messages(new_uids, modifiers_new, folder)
-
-                if len(folder_messages) > 0:
-                    save_email_messages(folder_messages, account, folder, new_messages=True)
+                for i in range(0, len(new_uids), messages_batch_size):
+                    folder_messages = server.get_messages(new_uids[i:i + messages_batch_size], modifiers_new, folder)
+                    if len(folder_messages) > 0:
+                        save_email_messages(folder_messages, account, folder, new_messages=True)
+                    del folder_messages
 
     except Exception, e:
         print traceback.format_exc(e)
@@ -745,25 +750,33 @@ def save_email_messages(messages, account, folder, new_messages=False):
     """
     task_logger.warn('Saving %s messages for %s in %s in the database', len(messages), account.email.email_address, folder.name_on_server)
     try:
-        query_batch_size = 10000
         new_email_attachments = {}
         new_inline_email_attachments = {}
         update_email_attachments = {}
         update_inline_email_attachments = {}
+        email_message_polymorphic_ctype = ContentType.objects.get_for_model(EmailMessage)
 
         if new_messages:
             task_logger.info('Saving these messages with the ORM since they are new')
 
             new_message_obj_list = []
             new_email_headers = {}
+            new_email_address_headers = {}
             for message in messages:
-                # Create new object
-                email_message = EmailMessage()
+                # Create get existing message or create a new one
                 if message.get_sent_date() is not None:
-                    email_message.sent_date = message.get_sent_date()
-                email_message.account = account
+                    sent_date = message.get_sent_date()
+                else:
+                    task_logger.warn('Emailmessage has no sent date, cannot create message')
 
-                email_message.uid = message.uid
+                email_message, created = EmailMessage.objects.get_or_create(
+                    uid=message.uid,
+                    folder_name=folder.name_on_server,
+                    account=account,
+                    sent_date=sent_date,
+                    tenant=account.tenant,
+                )
+
                 if message.get_flags() is not None:
                     email_message.is_seen = SEEN in message.get_flags()
                     email_message.flags = message.get_flags()
@@ -779,11 +792,10 @@ def save_email_messages(messages, account, folder, new_messages=False):
                 email_message.body_html = replace_anchors_in_html(body_html)
                 email_message.body_text = body_text
                 email_message.size = message.get_size()
-                email_message.folder_name = folder.name_on_server
                 email_message.folder_identifier = folder.identifier
                 email_message.is_private = False
                 email_message.tenant = account.tenant
-                email_message.polymorphic_ctype = ContentType.objects.get_for_model(EmailMessage)
+                email_message.polymorphic_ctype = email_message_polymorphic_ctype
                 # Add to object list
                 new_message_obj_list.append(email_message)
                 email_message.save()
@@ -798,14 +810,27 @@ def save_email_messages(messages, account, folder, new_messages=False):
                         del headers['Date']
 
                     email_headers = []
+                    email_address_headers = []
                     for name, value in headers.items():
                         email_header = EmailHeader()
                         email_header.name = name
                         email_header.value = value
                         email_headers.append(email_header)
+                        # For some headers we want to save it also in EmailAddressHeader model.
+                        if name in ['To', 'From', 'CC', 'Delivered-To', 'Sender']:
+                            email_addresses = getaddresses([value])
+                            for address_name, email_address in email_addresses:
+                                if email_address:
+                                    email_address_header = EmailAddressHeader()
+                                    email_address_header.name = name
+                                    email_address_header.value = email_address.lower()
+                                    email_address_headers.append(email_address_header)
                     if len(email_headers):
                         # Save reference to uid
                         new_email_headers.update({message.uid: email_headers})
+                    if len(email_address_headers):
+                        # Save reference to uid
+                        new_email_address_headers.update({message.uid: email_address_headers})
 
                 # Check for attachments
                 email_attachments = []
@@ -855,6 +880,11 @@ def save_email_messages(messages, account, folder, new_messages=False):
                         for header_obj in header_obj_list:
                             header_obj.message_id = id
 
+                    email_address_header_obj_list = new_email_address_headers.get(uid)
+                    if email_address_header_obj_list:
+                        for header_obj in email_address_header_obj_list:
+                            header_obj.message_id = id
+
                     attachment_obj_list = new_email_attachments.get(uid)
                     if attachment_obj_list:
                         for attachment_obj in attachment_obj_list:
@@ -873,7 +903,17 @@ def save_email_messages(messages, account, folder, new_messages=False):
                         for header in headers:
                             new_header_obj_list.append(header)
 
-                    EmailHeader.objects.bulk_create(new_header_obj_list, batch_size=query_batch_size)
+                    EmailHeader.objects.bulk_create(new_header_obj_list)
+
+                # Save new_email_address_headers
+                if len(new_email_address_headers):
+                    new_email_address_header_obj_list = []
+                    # Add header to object list
+                    for uid, email_address_headers in new_email_address_headers.items():
+                        for email_address_header in email_address_headers:
+                            new_email_address_header_obj_list.append(email_address_header)
+
+                    EmailAddressHeader.objects.bulk_create(new_email_address_header_obj_list)
 
         elif not new_messages:
             task_logger.info('Saving these messages with custom concatenated SQL since they need to be updated')
@@ -883,6 +923,7 @@ def save_email_messages(messages, account, folder, new_messages=False):
             param_list = []
             query_count = 0
             update_email_headers = {}
+            update_email_address_headers = {}
 
             cursor = None
             if len(messages) > 0:
@@ -950,14 +991,27 @@ def save_email_messages(messages, account, folder, new_messages=False):
                         del headers['Date']
 
                     email_headers = []
+                    email_address_headers = []
                     for name, value in headers.items():
                         email_header = EmailHeader()
                         email_header.name = name
                         email_header.value = value
                         email_headers.append(email_header)
+                        # For some headers we want to save it also in EmailAddressHeader model.
+                        if name in ['To', 'From', 'CC', 'Delivered-To', 'Sender']:
+                            email_addresses = getaddresses([value])
+                            for address_name, email_address in email_addresses:
+                                if email_address:
+                                    email_address_header = EmailAddressHeader()
+                                    email_address_header.name = name
+                                    email_address_header.value = email_address.lower()
+                                    email_address_headers.append(email_address_header)
                     if len(email_headers):
                         # Save reference to uid
                         update_email_headers.update({message.uid: email_headers})
+                    if len(email_address_headers):
+                        # Save reference to uid
+                        update_email_address_headers.update({message.uid: email_address_headers})
 
                 # Check for attachments
                 email_attachments = []
@@ -996,19 +1050,9 @@ def save_email_messages(messages, account, folder, new_messages=False):
                     # Save reference to uid
                     update_inline_email_attachments.update({message.uid: inline_email_attachments})
 
-                if query_count == query_batch_size:
-                    # Execute queries
-                    task_logger.info('Executing query batch (%s) now - queries for e-mail messages (full batch)', query_count)
-                    cursor.execute(total_query_string, param_list)
-
-                    # reset counter and query variables
-                    query_count = 0
-                    total_query_string = ''
-                    param_list = []
-
-            # Execute leftover queries
-            if query_count and query_count < query_batch_size:
-                task_logger.info('Executing query batch (%s) now - queries for e-mail messages (leftovers next batch)', query_count)
+            # Execute queries
+            if query_count:
+                task_logger.info('Executing (%s) queries for e-mail messages', query_count)
                 cursor.execute(total_query_string, param_list)
 
                 # reset counter and query variables
@@ -1027,11 +1071,24 @@ def save_email_messages(messages, account, folder, new_messages=False):
                 headers.append(header_name)
                 existing_headers_per_message.update({message_id: headers})
 
+            # Find existing email address headers per email message
+            existing_email_address_headers_per_message = {}
+            existing_email_address_headers_qs = EmailAddressHeader.objects.filter(message_id__in=[id for id, uid in email_messages]).values_list('message_id', 'name')
+            for message_id, header_name in existing_email_address_headers_qs:
+                headers = existing_email_address_headers_per_message.get(message_id, [])
+                headers.append(header_name)
+                existing_email_address_headers_per_message.update({message_id: headers})
+
             # Link message ids to headers and (inline) attachments
             for id, uid in email_messages:
                 header_obj_list = update_email_headers.get(uid)
                 if header_obj_list:
                     for header_obj in header_obj_list:
+                        header_obj.message_id = id
+
+                email_address_header_obj_list = update_email_address_headers.get(uid)
+                if email_address_header_obj_list:
+                    for header_obj in email_address_header_obj_list:
                         header_obj.message_id = id
 
                 attachment_obj_list = update_email_attachments.get(uid)
@@ -1078,19 +1135,9 @@ def save_email_messages(messages, account, folder, new_messages=False):
                     total_query_string += query_string
                     query_count += 1
 
-                    if query_count == query_batch_size:
-                        # Execute queries - queries for e-mail headers (full batch)
-                        task_logger.info('Executing query batch (%s) now - queries for e-mail headers (full batch)', query_count)
-                        cursor.execute(total_query_string, param_list)
-
-                        # reset counter and query variables
-                        query_count = 0
-                        total_query_string = ''
-                        param_list = []
-
-                # Execute leftover queries
-                if query_count and query_count < query_batch_size:
-                    task_logger.info('Executing query batch (%s) now - queries for e-mail headers (leftovers next batch)', query_count)
+                # Execute queries
+                if query_count:
+                    task_logger.info('Executing (%s) queries for e-mail headers', query_count)
                     cursor.execute(total_query_string, param_list)
 
                     # reset counter and query variables
@@ -1099,9 +1146,56 @@ def save_email_messages(messages, account, folder, new_messages=False):
                     param_list = []
 
                 else:
-                    task_logger.info('Not executing queries yet')
+                    task_logger.info('No queries to execute')
             if cursor:
                 cursor.close()
+
+            # Save update_email_address_headers
+            if len(update_email_address_headers):
+                update_email_address_header_obj_list = []
+                for uid, headers in update_email_address_headers.items():
+                    # Add header to object list
+                    for header in headers:
+                        update_email_address_header_obj_list.append(header)
+
+                # Build query string and parameter list
+                total_query_string = ''
+                param_list = []
+                query_count = 0
+                task_logger.info('Looping through % email headers that need updating', len(update_email_address_header_obj_list))
+                for header_obj in update_email_address_header_obj_list:
+                    # Decide whether to update or insert this email header
+                    if header_obj.name in existing_headers_per_message.get(header_obj.message_id, []):
+                        # Update email header
+                        query_string = 'UPDATE email_emailaddressheader SET '
+                        query_string += 'value = %s '
+
+                        query_string += 'WHERE name = %s AND message_id = %s;\n'
+                        param_list.append(header_obj.value)
+                        param_list.append(header_obj.name)
+                        param_list.append(header_obj.message_id)
+                    else:
+                        # Insert email header
+                        query_string = 'INSERT INTO email_emailaddressheader (name, value, message_id) VALUES (%s, %s, %s);\n'
+                        param_list.append(header_obj.name)
+                        param_list.append(header_obj.value)
+                        param_list.append(header_obj.message_id)
+
+                    total_query_string += query_string
+                    query_count += 1
+
+                # Execute queries
+                if query_count:
+                    task_logger.info('Executing (%s) queries for e-mailaddress headers', query_count)
+                    cursor = connection.cursor()
+                    cursor.execute(total_query_string, param_list)
+
+                    # reset counter and query variables
+                    query_count = 0
+                    total_query_string = ''
+                    param_list = []
+                else:
+                    task_logger.info('No queries to execute')
 
         # Save attachments for new messages
         for uid, attachment_list in new_email_attachments.items():

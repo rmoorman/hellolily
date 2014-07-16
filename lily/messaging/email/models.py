@@ -84,7 +84,7 @@ class EmailMessage(Message):
     body_text = models.TextField(blank=True, null=True)
     size = models.IntegerField(default=0, null=True)  # size in bytes
     folder_name = models.CharField(max_length=255)
-    folder_identifier = models.CharField(max_length=255, blank=True, null=True)
+    folder_identifier = models.CharField(max_length=255, blank=True, null=True, db_index=True)
     is_private = models.BooleanField(default=False)
     account = models.ForeignKey(EmailAccount, related_name='messages')
 
@@ -167,24 +167,7 @@ class EmailMessage(Message):
 
         return self._subject_header
 
-    @property
-    def to_name(self):
-        headers = None
-        if hasattr(self, '_to_headers'):
-            headers = self._to_headers
-        else:
-            headers = self.headers.filter(name='To')
-            self._to_headers = headers
-        if headers:
-            to_names = []
-            for header in headers:
-                to_names.append(email.utils.parseaddr(header.value)[0])
-
-            return u', '.join(to_names)
-        return u''
-
-    @property
-    def to_email(self):
+    def to_emails(self, include_names=True, include_self=False):
         headers = None
         if hasattr(self, '_to_headers'):
             headers = self._to_headers
@@ -194,10 +177,20 @@ class EmailMessage(Message):
 
         if headers:
             to_emails = []
+            to_names = []
+            own_email_address = self.account.email.email_address
             for header in headers:
                 for address in email.utils.getaddresses(header.value.split(',')):
-                    to_emails.append(address[1])
-            return u', '.join(to_emails)
+                    # The name is allowed to be empty, email address is not
+                    if (include_self or (address[0] != own_email_address and address[1] != own_email_address)) and address[1]:
+                        # If there is no name available, use the email address
+                        if include_names:
+                            to_names.append(address[0])
+                        to_emails.append(address[1])
+            if include_names:
+                return zip(to_names, to_emails)
+            else:
+                return to_emails
         return u'<%s>' % _(u'No address')
 
     @property
@@ -356,9 +349,21 @@ class EmailHeader(models.Model):
     A single e-mail header linked to an e-mail message.
     Most common are: 'to', 'from' and 'content-type'.
     """
-    name = models.CharField(max_length=255)
+    name = models.CharField(max_length=255, db_index=True)
     value = models.TextField(null=True)
     message = models.ForeignKey(EmailMessage, related_name='headers')
+
+    def __unicode__(self):
+        return u'%s - %s' % (self.name, self.value)
+
+
+class EmailAddressHeader(models.Model):
+    """
+    A simplified header with just the name of the header and the email address from the value of the header.
+    """
+    name = models.CharField(max_length=255, db_index=True)
+    value = models.TextField(null=True, db_index=True)
+    message = models.ForeignKey(EmailMessage)
 
     def __unicode__(self):
         return u'%s - %s' % (self.name, self.value)

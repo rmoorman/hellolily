@@ -264,6 +264,7 @@ MEDIA_BUNDLES = (
         'lily/plugins/data-tables/column-sort_hidden-title-numeric.js',
         'plugins/data-tables/DT_bootstrap.js',
         'lily/scripts/datatable-export.js',
+        'lily/scripts/table-bulk-actions.js',
     ),
     ('modal.css',
         'plugins/bootstrap-modal/css/bootstrap-modal-bs3patch.css',
@@ -306,8 +307,7 @@ MEDIA_BUNDLES = (
     ('forms.js',
         'js/jquery.formset.js',
 
-        'lily/scripts/plugins/custom/clickfocus/jquery.clickfocus.js',
-        'lily/scripts/plugins/custom/tabthis/jquery.tabthis.js',
+        # 'lily/scripts/plugins/custom/tabthis/jquery.tabthis.js',
         'lily/scripts/forms/formset_init.js',
 
         'plugins/select2/select2.js',
@@ -315,6 +315,8 @@ MEDIA_BUNDLES = (
         'plugins/bootstrap-datepicker/js/bootstrap-datepicker.js',
 
         'lily/scripts/forms/dataprovider.js',
+
+        'utils/js/utils.js',
 
         {'filter': 'mediagenerator.filters.i18n.I18N'},
     ),

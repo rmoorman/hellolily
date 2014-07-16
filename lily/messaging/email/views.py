@@ -5,6 +5,8 @@ import urllib
 import logging
 import email
 from email import Encoders
+from email.header import Header
+from email.utils import quote
 from email.MIMEBase import MIMEBase
 
 import anyjson
@@ -144,24 +146,30 @@ class EmailMessageDetailView(EmailBaseView, DetailView):
         """
         Verify this email message belongs to an account request.user has access to.
         """
-        object = super(EmailMessageDetailView, self).get_object(queryset=queryset)
-        if object.account not in self.all_email_accounts:
-            raise Http404()
+        email = super(EmailMessageDetailView, self).get_object(queryset=queryset)
 
-        if object.body_html is None or len(object.body_html.strip()) == 0 and (object.body_text is None or len(object.body_text.strip()) == 0):
-            self.get_from_imap(object)
+        # Only if the email is in one of our accounts, we mark it a read
+        mark_as_read = False
+        for account in self.all_email_accounts:
+            if account.user_group.filter(pk=self.request.user.pk).exists() > 0 and email.account == account:
+                mark_as_read = True
+                break
+
+        if email.body_html is None or not email.body_html.strip() and (email.body_text is None or not email.body_text.strip()):
+            self.get_from_imap(object, readonly=(not mark_as_read))
 
             # Re-fetch
-            object = super(EmailMessageDetailView, self).get_object(queryset=queryset)
+            email = super(EmailMessageDetailView, self).get_object(queryset=queryset)
 
         # Mark as read
-        object.is_seen = True
-        object.save()
+        if mark_as_read:
+            email.is_seen = True
+            email.save()
 
         # Force fetching from header, for some reason this doesn't happen in the templates
-        object.from_email
+        email.from_email
 
-        return object
+        return email
 
     def get_context_data(self, **kwargs):
         """
@@ -196,7 +204,7 @@ class EmailMessageDetailView(EmailBaseView, DetailView):
 
         return kwargs
 
-    def get_from_imap(self, email_message):
+    def get_from_imap(self, email_message, readonly=False):
         """
         Download an email message from IMAP.
         """
@@ -212,7 +220,7 @@ class EmailMessageDetailView(EmailBaseView, DetailView):
                 imap_logger.info('Searching IMAP for %s in %s' % (email_message.uid, email_message.folder_name))
 
                 message = server.get_message(email_message.uid, ['BODY[]', 'FLAGS', 'RFC822.SIZE', 'INTERNALDATE'],
-                                             server.get_folder(email_message.folder_name), readonly=False)
+                                             server.get_folder(email_message.folder_name), readonly=readonly)
                 if message is not None:
                     imap_logger.info('Message retrieved, saving in database')
                     save_email_messages([message], email_message.account, message.folder)
@@ -1059,7 +1067,6 @@ class EmailMessageReplyView(EmailMessageComposeBaseView):
 
         if self.object:
             kwargs['initial']['subject'] = 'Re: %s' % self.object.subject
-            kwargs['initial']['send_from'] = self.object.to_email
             kwargs['initial']['send_to_normal'] = self.object.from_combined
 
         return kwargs
@@ -1069,11 +1076,14 @@ class EmailMessageReplyView(EmailMessageComposeBaseView):
         Return reply-to e-mail header.
         """
         email_headers = {}
-        if self.object and self.object.from_email:
-            sender = email.utils.parseaddr(self.object.from_email)
-            reply_to_name = sender[0]
-            reply_to_address = sender[1]
-            email_headers.update({'Reply-To': '"%s" <%s>' % (reply_to_name, reply_to_address)})
+        if self.object:
+            # Get the ID of the selected email account
+            selected_account = self.request.POST.get('send_from')
+            email_account = EmailAccount.objects.get(pk=selected_account)
+            # quote() so Reply-To header doesn't break in certain email programs
+            reply_to_name = quote(email_account.from_name)
+            reply_to_email = email_account.email.email_address
+            email_headers.update({'Reply-To': '"%s" <%s>' % (reply_to_name, reply_to_email)})
         return email_headers
 email_reply_view = login_required(EmailMessageReplyView.as_view())
 
@@ -1096,7 +1106,6 @@ class EmailMessageForwardView(EmailMessageReplyView):
 
         if self.object:
             kwargs['initial']['subject'] = 'Fwd: %s' % self.object.subject
-            kwargs['initial']['send_from'] = self.object.to_email
             kwargs['initial']['send_to_normal'] = ''
 
         return kwargs
@@ -1106,11 +1115,14 @@ class EmailMessageForwardView(EmailMessageReplyView):
         Return reply-to e-mail header.
         """
         email_headers = {}
-        if self.object and self.object.to_email:
-            sender = email.utils.parseaddr(self.object.to_email)
-            reply_to_name = sender[0]
-            reply_to_address = sender[1]
-            email_headers.update({'Reply-To': '"%s" <%s>' % (reply_to_name, reply_to_address)})
+        if self.object:
+            # Get the ID of the selected email account
+            selected_account = self.request.POST.get('send_from')
+            email_account = EmailAccount.objects.get(pk=selected_account)
+            # quote() so Reply-To header doesn't break in certain email programs
+            reply_to_name = quote(email_account.from_name)
+            reply_to_email = email_account.email.email_address
+            email_headers.update({'Reply-To': '"%s" <%s>' % (reply_to_name, reply_to_email)})
         return email_headers
 email_forward_view = login_required(EmailMessageForwardView.as_view())
 
