@@ -57,11 +57,11 @@ class ListAccountView(ExportListViewMixin, SortedListMixin, FilteredListByTagMix
         }),
         ('created', {
             'mData': 'created',
-            'sClass': 'hide_on_small_screen',
+            'sClass': 'visible-md visible-lg',
         }),
         ('modified', {
             'mData': 'modified',
-            'sClass': 'hide_on_small_screen',
+            'sClass': 'visible-md visible-lg',
         }),
         ('tags', {
             'mData': 'tags',
@@ -230,6 +230,14 @@ class DetailAccountView(HistoryListViewMixin):
         email_address_list.extend(self.object.email_addresses.all())
 
         return email_address_list
+
+    def get_context_data(self, **kwargs):
+        kwargs = super(DetailAccountView, self).get_context_data(**kwargs)
+        kwargs.update({
+            'email_count': self.get_emails_list().count(),
+        })
+
+        return kwargs
 
 
 class CreateUpdateAccountView(DeleteBackAddSaveFormViewMixin, EmailAddressFormSetViewMixin, PhoneNumberFormSetViewMixin,
