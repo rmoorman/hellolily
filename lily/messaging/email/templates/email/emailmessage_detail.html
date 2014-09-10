@@ -90,7 +90,7 @@
             </div>
         </div>
         <div class="inbox-loading">
-            <i class="icon-spinner icon-spin"></i> {% trans 'Loading..' %}
+            <i class="icon-spinner icon-spin"></i> {% trans 'Loading...' %}
         </div>
         <div class="inbox-view">
             {% comment %}
@@ -172,6 +172,9 @@ $(function($) {
             var iframe = $('.inbox-view').find('iframe[data-message-id="' + task_result.message_id + '"]').get(0);
             // Reload the iframe and get the message
             iframe.src = iframe.src;
+        }
+    });
+            $(iframe).src = iframe_src;
         }
     });
 

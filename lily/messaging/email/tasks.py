@@ -1,9 +1,11 @@
 from __future__ import absolute_import
 
 import gc
+import json
 import logging
 import traceback
 from datetime import datetime, timedelta
+from smtplib import SMTPRecipientsRefused
 
 from Crypto import Random
 from celery import task
@@ -12,16 +14,19 @@ from dateutil.tz import tzutc
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.db import connection, transaction
+from django.db.models import Q
+from imapclient import SEEN, DELETED, DRAFT
 
-from lily.messaging.email.models import EmailAccount, EmailMessage, EmailHeader, OK_EMAILACCOUNT_AUTH, \
-    NO_EMAILACCOUNT_AUTH, EmailAddressHeader, UNKNOWN_EMAILACCOUNT_AUTH
+from lily.messaging.email.models import EmailAccount, EmailMessage, EmailHeader, EmailAttachment, OK_EMAILACCOUNT_AUTH, \
+    NO_EMAILACCOUNT_AUTH, EmailAddressHeader, UNKNOWN_EMAILACCOUNT_AUTH, EmailOutboxMessage
 from lily.messaging.email.task_utils import EmailMessageCreationError, save_email_message, save_headers, \
     save_attachments, get_headers_and_identifier, create_email_attachments, create_headers_query_string, \
-    create_message_query_string
-from lily.messaging.email.utils import LilyIMAP
+    create_message_query_string, get_attachment_upload_path, replace_anchors_in_html, replace_cid_in_html
+from lily.messaging.email.utils import LilyIMAP, smtp_connect, EmailMultiRelated
 from lily.users.models import CustomUser
 from python_imap.errors import IMAPConnectionError
 from python_imap.folder import ALLMAIL, DRAFTS, TRASH, INBOX, SENT
+from python_imap.utils import convert_html_to_text, parse_search_keys
 from taskmonitor.decorators import monitor_task
 from taskmonitor.utils import lock_task
 
@@ -1025,9 +1030,9 @@ task_prerun.connect(_task_prerun_listener)
 @task(name='get_from_imap', bind=True)
 @monitor_task(logger=task_logger)
 def get_from_imap(email_account_id, message_uid, folder_name, message_identifier, message_id, readonly):
-    try:
-        email_account = EmailAccount.objects.get(pk=email_account_id)
+    email_account = EmailAccount.objects.get(pk=email_account_id)
 
+    try:
         with LilyIMAP(email_account) as server:
             if server.login(email_account.username, email_account.password):
                 email_account.auth_ok = OK_EMAILACCOUNT_AUTH
@@ -1045,7 +1050,7 @@ def get_from_imap(email_account_id, message_uid, folder_name, message_identifier
                 except IMAPConnectionError:
                     pass
                 else:
-                    if message:
+                    if message is not None:
                         task_logger.debug('Message retrieved, saving in database')
                         save_email_messages([message], email_account, message.folder)
 
@@ -1062,3 +1067,200 @@ def get_from_imap(email_account_id, message_uid, folder_name, message_identifier
         return None
 
     return {'message_id': message_id}
+
+
+@task(name='save_message', bind=True)
+@monitor_task(logger=task_logger)
+def save_message(email_account_id, email_temp_id):
+    email_temp = EmailOutboxMessage.objects.get(pk=email_temp_id)
+
+    kwargs = dict(
+        subject=email_temp.subject,
+        from_email=email_temp.from_email,
+        to=[email_temp.to],
+        cc=[email_temp.cc],
+        bcc=[email_temp.bcc],
+        headers=json.loads(email_temp.headers),
+        body=email_temp.body,
+        connection=None,
+        attachments=None,
+        alternatives=None,
+    )
+
+    email_message = EmailMultiRelated(**kwargs)
+
+    message_string = email_message.message().as_string(unixfrom=False)
+
+    try:
+        email_account = EmailAccount.objects.get(pk=email_account_id)
+        server = LilyIMAP(email_account)
+
+        if server.login(email_account.username, email_account.password):
+            email_account.auth_ok = OK_EMAILACCOUNT_AUTH
+            email_account.save()
+
+        # Save *email_message* as draft
+        folder = server.get_folder(DRAFTS)
+
+        # Save draft remotely
+        uid = server.append(
+            folder,
+            message_string,
+            flags=[DRAFT]
+        )
+
+        # Sync this specific message
+        message = server.get_message(
+            uid,
+            modifiers=['BODY.PEEK[]', 'FLAGS', 'RFC822.SIZE'],
+            folder=folder
+        )
+
+        save_email_messages(
+            [message],
+            email_account,
+            folder,
+            new_messages=True
+        )
+
+        new_draft = EmailMessage.objects.get(
+            account=email_account,
+            uid=uid,
+            folder_name=folder.name_on_server
+        )
+
+        return new_draft.pk
+    except IMAPConnectionError:
+        return None
+
+
+@task(name='send_message', bind=True)
+@monitor_task(logger=task_logger)
+def send_message(email_account_id, email_temp_id):
+    email_temp = EmailOutboxMessage.objects.get(pk=email_temp_id)
+
+    kwargs = dict(
+        subject=email_temp.subject,
+        from_email=email_temp.from_email,
+        to=[email_temp.to],
+        cc=[email_temp.cc],
+        bcc=[email_temp.bcc],
+        headers=json.loads(email_temp.headers),
+        body=email_temp.body,
+        connection=None,
+        attachments=None,
+        alternatives=None,
+    )
+
+    email_message = EmailMultiRelated(**kwargs)
+
+    print email_message.recipients()
+
+    email_mes = EmailMultiRelated(kwargs)
+
+    print email_mes.recipients()
+
+    try:
+        email_account = EmailAccount.objects.get(pk=email_account_id)
+        server = LilyIMAP(email_account)
+
+        if server.login(email_account.username, email_account.password):
+            email_account.auth_ok = OK_EMAILACCOUNT_AUTH
+            email_account.save()
+
+        # Send initial message
+        connection = smtp_connect(email_account, fail_silently=False)
+        connection.send_messages([email_message])
+
+        # Send extra for BCC recipients if any
+        if email_message.bcc:
+            recipients = email_message.bcc
+
+            # Send separate messages
+            for recipient in recipients:
+                email_message.bcc = []
+                email_message.to = [recipient]
+                connection.send_messages([email_message])
+        connection.close()
+
+        # Synchronize only new messages from folder *SENT*
+        synchronize_folder(
+            email_account,
+            server,
+            server.get_folder(SENT),
+            criteria=['subject "%s"' % email_message.subject],
+            new_only=True
+        )
+    except Exception, e:
+        task_logger.error(traceback.format_exc(e))
+        return False
+
+    return True
+
+
+@task(name='email_search', bind=True)
+@monitor_task(logger=task_logger)
+def email_search(search_key, account_id, user_id, folder, status_id):
+    """
+    Perform a search on given or all accounts and save the results.
+    """
+    def get_uids_from_local(uids, account, folder):
+        qs = EmailMessage.objects.none()
+        if folder is not None:
+            qs = EmailMessage.objects.filter(Q(folder_identifier=folder) | Q(folder_name=folder))
+
+        return qs.filter(account=account, uid__in=uids).order_by('-sent_date')
+
+    user = CustomUser.objects.get(pk=user_id)
+    message_ids = []
+
+    try:
+        # Get accounts the user has access to
+        if account_id is not None:
+            accounts_ids = [int(account_id)]
+            accounts = user.get_messages_accounts(EmailAccount, pk__in=accounts_ids)
+
+            if len(accounts) == 0:  # when provided, but no matches were found raise 404
+                return None
+        else:
+            accounts = user.get_messages_accounts(EmailAccount)
+
+        # Find corresponding messages in database and save message pks
+        for email_account in accounts:
+            with LilyIMAP(email_account) as server:
+                if server.login(email_account.username, email_account.password):
+                    email_account.auth_ok = OK_EMAILACCOUNT_AUTH
+                    email_account.save()
+
+                    try:
+                        folder = server.get_folder(folder)
+                        total_count, uids = server.get_uids(folder, parse_search_keys(search_key))
+
+                        if len(uids):
+                            qs = get_uids_from_local(uids, email_account, folder)
+                            if len(qs) == 0:
+                                # Get actual messages for *uids* from *server* when they're not available locally
+                                modifiers = ['BODY.PEEK[HEADER.FIELDS (Reply-To Subject Content-Type To Cc Bcc Delivered-To From Message-ID Sender In-Reply-To Received Date)]', 'FLAGS', 'RFC822.SIZE', 'INTERNALDATE']
+                                folder_messages = server.get_messages(uids, modifiers, folder)
+
+                                if len(folder_messages) > 0:
+                                    save_email_messages(
+                                        folder_messages,
+                                        email_account,
+                                        folder,
+                                        new_messages=True
+                                    )
+
+                            pks = qs.values_list('pk', flat=True)
+                            message_ids += list(pks)
+                    except IMAPConnectionError:
+                        return None
+                elif not server.auth_ok:
+                    email_account.auth_ok = NO_EMAILACCOUNT_AUTH
+                    email_account.save()
+    except Exception, e:
+        task_logger.error(traceback.format_exc(e))
+        return None
+
+    return {'message_ids': message_ids, 'search_key': search_key, 'status_id': status_id}
+

@@ -1,14 +1,15 @@
 import datetime
-import os
-import traceback
-import urllib
+import json
 import logging
+import os
+import urllib
 from email import Encoders
 from email.utils import quote
 from email.MIMEBase import MIMEBase
 
 import anyjson
 from bs4 import BeautifulSoup
+from celery.result import AsyncResult
 from dateutil.tz import tzutc
 from django.conf import settings
 from django.contrib import messages
@@ -28,21 +29,19 @@ from django.views.generic.base import View
 from django.views.generic.detail import DetailView, SingleObjectMixin
 from django.views.generic.edit import CreateView, FormView, UpdateView, DeleteView
 from django.views.generic.list import ListView
-from imapclient.imapclient import DRAFT
 
 from python_imap.errors import IMAPConnectionError
 from python_imap.folder import DRAFTS, INBOX, SENT, TRASH, SPAM, ALLMAIL, IMPORTANT, STARRED
-from python_imap.logger import logger as imap_logger
-from python_imap.utils import convert_html_to_text, parse_search_keys, extract_tags_from_soup
+from python_imap.utils import convert_html_to_text, extract_tags_from_soup
 from lily.contacts.models import Contact
 from lily.messaging.email.forms import (CreateUpdateEmailTemplateForm, EmailTemplateFileForm, ComposeEmailForm,
                                         EmailConfigurationWizard_1, EmailConfigurationWizard_2,
                                         EmailConfigurationWizard_3, EmailConfigurationWizard_4, EmailShareForm,
                                         EmailAccountForm)
 from lily.messaging.email.models import (EmailAttachment, EmailMessage, EmailAccount, EmailTemplate, EmailProvider,
-                                         OK_EMAILACCOUNT_AUTH, NO_EMAILACCOUNT_AUTH)
-from lily.messaging.email.tasks import (save_email_messages, mark_messages, delete_messages, synchronize_folder,
-                                        move_messages, get_from_imap)
+                                         EmailDraft, OK_EMAILACCOUNT_AUTH, NO_EMAILACCOUNT_AUTH, EmailOutboxMessage)
+from lily.messaging.email.tasks import (mark_messages, delete_messages, move_messages, send_message, save_message,
+					move_messages, get_from_imap, email_search)
 from lily.messaging.email.utils import (get_email_parameter_choices,
                                         TemplateParser,
                                         get_attachment_filename_from_url,
@@ -53,6 +52,8 @@ from lily.tenant.middleware import get_current_user
 from lily.users.models import CustomUser, EmailAddress
 from lily.utils.functions import is_ajax
 from lily.utils.views.mixins import LoginRequiredMixin, SortedListMixin, FilteredListMixin
+
+from taskmonitor.models import TaskStatus
 
 
 log = logging.getLogger('django.request')
@@ -659,7 +660,9 @@ class EmailMessageComposeBaseView(EmailBaseView, FormView, SingleObjectMixin):
     def post(self, request, *args, **kwargs):
         self.get_object()
         # If there is no previous email and the draft is being discarded, redirect immediately.
-        if 'submit-discard' in self.request.POST and not self.object:
+        if 'submit-save' in self.request.POST:
+            return super(EmailMessageComposeBaseView, self).post(request, *args, **kwargs)
+        elif 'submit-discard' in self.request.POST and not self.object:
             return redirect(self.get_success_url())
         else:
             return super(EmailMessageComposeBaseView, self).post(request, *args, **kwargs)
@@ -731,61 +734,70 @@ class EmailMessageComposeBaseView(EmailBaseView, FormView, SingleObjectMixin):
                     kwargs = dict(
                         subject=unsaved_form.subject,
                         from_email=email_account.email.email_address,
-                        to=[unsaved_form.send_to_normal] if len(unsaved_form.send_to_normal) else None,
-                        bcc=[unsaved_form.send_to_bcc] if len(unsaved_form.send_to_bcc) else None,
+                        to=unsaved_form.send_to_normal if len(unsaved_form.send_to_normal) else [],
+                        bcc=unsaved_form.send_to_bcc if len(unsaved_form.send_to_bcc) else [],
                         connection=None,
                         attachments=None,
                         headers=self.get_email_headers(),
                         alternatives=None,
-                        cc=[unsaved_form.send_to_cc] if len(unsaved_form.send_to_cc) else None,
+                        cc=unsaved_form.send_to_cc if len(unsaved_form.send_to_cc) else [],
                         body=convert_html_to_text(unsaved_form.body_html, keep_linebreaks=True)
                     )
 
-                    # Use multipart/alternative when sending just text e-mails (plain and/or html)
-                    if len(mapped_attachments.keys()) == 0:
-                        # Attach an HTML version as alternative to *body*
-                        email_message = EmailMultiAlternatives(**kwargs)
-                        email_message.attach_alternative(unsaved_form.body_html, 'text/html')
-                    else:
-                        # Use multipart/related when sending inline images
-                        email_message = EmailMultiRelated(**kwargs)
+                    # # Use multipart/alternative when sending just text e-mails (plain and/or html)
+                    # if len(mapped_attachments.keys()) == 0:
+                    #     # Attach an HTML version as alternative to *body*
+                    #     email_message = EmailMultiAlternatives(**kwargs)
+                    #     email_message.attach_alternative(unsaved_form.body_html, 'text/html')
+                    # else:
+                    #     # Use multipart/related when sending inline images
+                    #     email_message = EmailMultiRelated(**kwargs)
+                    #
+                    #     # Put image content for attachments in *email_message*
+                    #     attachments = EmailAttachment.objects.filter(pk__in=mapped_attachments.keys())
+                    #     for attachment in attachments:
+                    #         storage_file = default_storage._open(attachment.attachment.name)
+                    #         filename = get_attachment_filename_from_url(attachment.attachment.name)
+                    #
+                    #         # Add as inline attachment
+                    #         storage_file.open()
+                    #         content = storage_file.read()
+                    #         storage_file.close()
+                    #         email_message.attach_related(filename, content, storage_file.key.content_type)
+                    #
+                    #         # Update attribute src for inline image with the Content-ID
+                    #         inline_image = mapped_attachments[attachment.pk]
+                    #         inline_image['src'] = 'cid:%s' % filename
+                    #
+                    #     # Use new HTML
+                    #     email_message.attach_alternative(unsaved_form.body_html, 'text/html')
 
-                        # Put image content for attachments in *email_message*
-                        attachments = EmailAttachment.objects.filter(pk__in=mapped_attachments.keys())
-                        for attachment in attachments:
-                            storage_file = default_storage._open(attachment.attachment.name)
-                            filename = get_attachment_filename_from_url(attachment.attachment.name)
+                    task = None
+                    if 'tasks' not in self.request.session:
+                        self.request.session['tasks'] = {}
 
-                            # Add as inline attachment
-                            storage_file.open()
-                            content = storage_file.read()
-                            storage_file.close()
-                            email_message.attach_related(filename, content, storage_file.key.content_type)
-
-                            # Update attribute src for inline image with the Content-ID
-                            inline_image = mapped_attachments[attachment.pk]
-                            inline_image['src'] = 'cid:%s' % filename
-
-                        # Use new HTML
-                        email_message.attach_alternative(unsaved_form.body_html, 'text/html')
-
-                    success = True
                     if 'submit-save' in self.request.POST:  # Save draft
-                        success = self.save_message(email_account, server, email_message)
-                        if not success:
+                        task = self.save_message(email_account, kwargs)
+                        if task:
+                            self.request.session['tasks'].update({'save_message': task.id})
+                            self.request.session.modified = True
+                        else:
                             messages.warning(self.request, _('Failed to save e-mail. Please try again later.'))
                     elif 'submit-send' in self.request.POST:  # Send draft
-                        if self.object:
-                            email_message = self.attach_stored_files(email_message, self.object.pk)
-                        success = self.send_message(email_account, server, email_message)
-                        if success:
-                            recipients = ', '.join(email_message.to + email_message.cc + email_message.bcc)
-                            messages.success(self.request, _('E-mail sent to %s') % truncatechars(recipients, 140))
+                        task = self.send_message(email_account, kwargs)
+                        if task:
+                            to = [kwargs['to']] if kwargs['to'] else []
+                            cc = [kwargs['cc']] if kwargs['cc'] else []
+                            bcc = [kwargs['bcc']] if kwargs['bcc'] else []
+                            recipients = ', '.join(to + cc + bcc)
+                            messages.info(self.request, _('Attempting to send email to %s') % truncatechars(recipients, 140))
+                            self.request.session['tasks'].update({'send_message': task.id})
+                            self.request.session.modified = True
                         else:
                             messages.warning(self.request, _('Failed to send e-mail. Please try again later.'))
 
                     # Remove an old draft when sending an e-mail message or saving a new draft
-                    if self.object and success and self.remove_old_message:
+                    if self.object and task and self.remove_old_message:
                         self.remove_draft(server)
 
                 if 'submit-discard' in self.request.POST and self.object and self.remove_old_message:
@@ -797,6 +809,9 @@ class EmailMessageComposeBaseView(EmailBaseView, FormView, SingleObjectMixin):
                 # TODO: should be a form error ? That would return the form's content at least.
                 messages.warning(self.request, _('Failed to save draft. Cannot login for %s') % email_account.email.email_address)
                 return redirect(self.request.META.get('HTTP_REFERER', 'messaging_email_compose'))
+
+        if is_ajax(self.request):
+            return HttpResponse(anyjson.serialize({'task_id': task.id}), content_type='application/json')
 
         return super(EmailMessageComposeBaseView, self).form_valid(form)
 
@@ -855,50 +870,37 @@ class EmailMessageComposeBaseView(EmailBaseView, FormView, SingleObjectMixin):
 
         return email_message
 
-    def save_message(self, account, server, email_message):
+    def save_message(self, account, kwargs):
         """
         Save the message as a draft to the database and to the server via IMAP.
         """
         # Check for attachments
-        email_message = self.attach_request_files(email_message)
-        if self.object and self.object.pk:
-            email_message = self.attach_stored_files(email_message, self.object.pk)
+        # email_message = self.attach_request_files(email_message)
+        # if self.object and self.object.pk:
+        #     email_message = self.attach_stored_files(email_message, self.object.pk)
 
-        message_string = email_message.message().as_string(unixfrom=False)
-        try:
-            # Save *email_message* as draft
-            folder = server.get_folder(DRAFTS)
+        # message_string = email_message.message().as_string(unixfrom=False)
 
-            # Save draft remotely
-            uid = server.append(
-                folder,
-                message_string,
-                flags=[DRAFT]
-            )
+        # TODO: Convert to new EmailTemp class
 
-            # Sync this specific message
-            message = server.get_message(
-                uid,
-                modifiers=['BODY.PEEK[]', 'FLAGS', 'RFC822.SIZE'],
-                folder=folder
-            )
-            save_email_messages(
-                [message],
-                account,
-                folder,
-                new_messages=True
-            )
-            self.new_draft = EmailMessage.objects.get(
-                account=account,
-                uid=uid,
-                folder_name=folder.name_on_server
-            )
-        except IMAPConnectionError:
-            return False
+        email_temp = EmailOutboxMessage(subject=kwargs['subject'], from_email=kwargs['from_email'], to=kwargs['to'],
+                               cc=kwargs['cc'], bcc=kwargs['bcc'], body=kwargs['body'],
+                               headers=json.dumps(kwargs['headers']))
 
-        return True
+        email_temp.save()
 
-    def send_message(self, account, active_server, email_message):
+        locked, status = get_task_status('save_message')
+
+        async_result = save_message.apply_async(
+            args=(account.id, email_temp.id),  # TODO: message_string should be email_temp.pk
+            max_retries=1,
+            default_retry_delay=100,
+            kwargs={'status_id': status.pk},
+        )
+
+        return async_result
+
+    def send_message(self, account, kwargs):
         """
         Send the message via SMTP and save the sent message to the database.
 
@@ -906,38 +908,22 @@ class EmailMessageComposeBaseView(EmailBaseView, FormView, SingleObjectMixin):
         :param email_message: The message that needs to be sent.
         :return: A Boolean indicating whether the save was successful.
         """
-        # Check for attachments
-        email_message = self.attach_request_files(email_message)
+        email_temp = EmailOutboxMessage(subject=kwargs['subject'], from_email=kwargs['from_email'], to=kwargs['to'],
+                               cc=kwargs['cc'], bcc=kwargs['bcc'], body=kwargs['body'],
+                               headers=json.dumps(kwargs['headers']))
 
-        try:
-            # Send initial message
-            connection = smtp_connect(account, fail_silently=False)
-            connection.send_messages([email_message])
+        email_temp.save()
 
-            # Send extra for BCC recipients if any
-            if email_message.bcc:
-                recipients = email_message.bcc
+        locked, status = get_task_status('send_message')
 
-                # Send separate messages
-                for recipient in recipients:
-                    email_message.bcc = []
-                    email_message.to = [recipient]
-                    connection.send_messages([email_message])
-            connection.close()
+        async_result = send_message.apply_async(
+            args=(account.id, email_temp.id),
+            max_retries=1,
+            default_retry_delay=100,
+            kwargs={'status_id': status.pk},
+        )
 
-            # Synchronize only new messages from folder *SENT*
-            synchronize_folder(
-                account,
-                active_server,
-                active_server.get_folder(SENT),
-                criteria=['subject "%s"' % email_message.subject],
-                new_only=True
-            )
-        except Exception, e:  # pylint: disable=W0703
-            log.error(traceback.format_exc(e))
-            return False
-
-        return True
+        return async_result
 
     def remove_draft(self, server):
         """
@@ -1351,10 +1337,6 @@ class EmailShareView(LoginRequiredMixin, FormView):
 
 class EmailSearchView(EmailFolderView):
     def get(self, request, *args, **kwargs):
-        """
-        Parse search keys and search via IMAP.
-        """
-        # Look in url which account id and folder the searched is performed in
         account_id = kwargs.get('account_id', None)
 
         # Get accounts the user has access to
@@ -1385,8 +1367,78 @@ class EmailSearchView(EmailFolderView):
             self.folder_identifier = folder_flag
 
         # Check if folder is from account
+        if not self.folder_found(accounts_qs):
+            raise Http404()
+
+        task_status = kwargs.get('status_id', '')
+
+        if task_status:
+            try:
+                task_status = TaskStatus.objects.get(pk=task_status)
+                task_id = task_status.task_id
+                async_result = AsyncResult(task_id)
+                result = async_result.result
+                self.resultset = result.get('message_ids')
+            except Exception, e:
+                import traceback
+                log.error(traceback.format_exc(e))
+        else:
+            # Look in url which account id and folder the searched is performed in
+            search_key = self.request.GET.get('search_key', kwargs.get('search_key'))
+
+            locked, status = get_task_status('email_search')
+
+            async_result = email_search.apply_async(
+                args=(search_key, account_id, get_current_user().pk, folder_name, status.id),
+                max_retries=1,
+                default_retry_delay=100,
+                kwargs={'status_id': status.pk},
+            )
+
+            if async_result:
+                if 'tasks' not in self.request.session:
+                    self.request.session['tasks'] = {}
+                self.request.session['tasks'].update({'email_search': async_result.id})
+                self.request.session.modified = True
+            else:
+                messages.warning(self.request, _('Something went wrong while searching. Please try again later.'))
+
+            if is_ajax(self.request):
+                return HttpResponse(anyjson.serialize({'task_id': async_result.id}), content_type='application/json')
+
+        return super(EmailSearchView, self).get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        """
+        Return all messages matching the result set.
+        """
+        if hasattr(self, 'resultset'):
+            return EmailMessage.objects.filter(pk__in=self.resultset).extra(select={
+                'num_attachments': 'SELECT COUNT(*) FROM email_emailattachment WHERE email_emailattachment.message_id = email_emailmessage.message_ptr_id AND inline=False'
+            }).order_by('-sent_date')
+        else:
+            return EmailMessage.objects.none()
+
+    def get_context_data(self, **kwargs):
+        """
+        Overloading super().get_context_data to reflect the folder being searched in.
+        """
+        kwargs = super(EmailSearchView, self).get_context_data(**kwargs)
+        kwargs.update({
+            'list_title': _('%s for %s') % (self.folder_locale_name, kwargs.get('list_title')),
+            'search_key': self.kwargs.get('search_key', ''),
+        })
+
+        if not self.kwargs.get('status_id'):
+            kwargs.update({
+                'polling_results': True
+            })
+
+        return kwargs
+
+    def folder_found(self, accounts):
         folder_found = False
-        for account in accounts_qs:
+        for account in accounts:
             for folder_name, folder in account.folders.items():
                 if self.folder_identifier in folder.get('flags'):
                     folder_found = True
@@ -1420,92 +1472,7 @@ class EmailSearchView(EmailFolderView):
                             self.folder_locale_name = sub_folder_name
                             break
 
-            if not folder_found:
-                raise Http404()
-
-        # Scrape messages together from one or more e-mail accounts
-        search_criteria = parse_search_keys(kwargs.get('search_key'))
-        self.imap_search_in_accounts(search_criteria, accounts=accounts_qs)
-
-        return super(EmailSearchView, self).get(request, *args, **kwargs)
-
-    def post(self, request, *args, **kwargs):  # pylint: disable=W0613
-        # Check if we have something to search for
-        if not request.POST.get('search_key'):
-            return redirect(request.META.get('HTTP_REFERER'))
-
-        # Redirect so self with the keyword in the url
-        return redirect('%s%s/' % (request.path, request.POST.get('search_key')))
-
-    def imap_search_in_accounts(self, search_criteria, accounts):
-        """
-        Perform a search on given or all accounts and save the results.
-        """
-        def get_uids_from_local(uids, account):
-            qs = EmailMessage.objects.none()
-            if self.folder_name is not None and self.folder_identifier is not None:
-                qs = EmailMessage.objects.filter(Q(folder_identifier=self.folder_identifier) | Q(folder_name=self.folder_name))
-            elif self.folder_name is not None:
-                qs = EmailMessage.objects.filter(folder_name__in=[self.folder_name, self.folder])
-            elif self.folder_identifier is not None:
-                qs = EmailMessage.objects.filter(folder_identifier=self.folder_identifier)
-            return qs.filter(account=account, uid__in=uids).order_by('-sent_date')
-
-        self.resultset = []  # result set of email messages pks
-
-        # Find corresponding messages in database and save message pks
-        for email_account in accounts:
-            with LilyIMAP(email_account) as server:
-                if server.login(email_account.username, email_account.password):
-                    email_account.auth_ok = OK_EMAILACCOUNT_AUTH
-                    email_account.save()
-
-                    try:
-                        folder = server.get_folder(self.folder_identifier or self.folder)
-                        total_count, uids = server.get_uids(folder, search_criteria)  # pylint: disable=W0612
-
-                        if len(uids):
-                            qs = get_uids_from_local(uids, email_account)
-                            if len(qs) == 0:
-                                # Get actual messages for *uids* from *server* when they're not available locally
-                                modifiers = ['BODY.PEEK[HEADER.FIELDS (Reply-To Subject Content-Type To Cc Bcc Delivered-To From Message-ID Sender In-Reply-To Received Date)]', 'FLAGS', 'RFC822.SIZE', 'INTERNALDATE']
-                                folder_messages = server.get_messages(uids, modifiers, folder)
-
-                                if len(folder_messages) > 0:
-                                    save_email_messages(
-                                        folder_messages,
-                                        email_account,
-                                        folder,
-                                        new_messages=True
-                                    )
-
-                            pks = qs.values_list('pk', flat=True)
-                            self.resultset += list(pks)
-                    except IMAPConnectionError:
-                        messages.warning(self.request, _('Failed to connect to your mail server. Please try again later.'))
-                elif not server.auth_ok:
-                    email_account.auth_ok = NO_EMAILACCOUNT_AUTH
-                    email_account.save()
-
-    def get_queryset(self):
-        """
-        Return all messages matching the result set.
-        """
-        return EmailMessage.objects.filter(pk__in=self.resultset).extra(select={
-            'num_attachments': 'SELECT COUNT(*) FROM email_emailattachment WHERE email_emailattachment.message_id = email_emailmessage.message_ptr_id AND inline=False'
-
-        }).order_by('-sent_date')
-
-    def get_context_data(self, **kwargs):
-        """
-        Overloading super().get_context_data to reflect the folder being searched in.
-        """
-        kwargs = super(EmailSearchView, self).get_context_data(**kwargs)
-        kwargs.update({
-            'list_title': _('%s for %s') % (self.folder_locale_name, kwargs.get('list_title')),
-            'search_key': self.kwargs.get('search_key', ''),
-        })
-        return kwargs
+        return folder_found
 
 
 class EmailAccountChangePasswordView(LoginRequiredMixin, UpdateView):

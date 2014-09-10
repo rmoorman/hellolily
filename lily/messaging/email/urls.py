@@ -50,6 +50,7 @@ urlpatterns = patterns(
     url(r'^templates/parse/$', ParseEmailTemplateView.as_view(), name='messaging_email_template_parse'),
 
     # search
+    url(r'^search/(?P<account_id>[\d-]+)/(?P<folder>[^/].+)/(?P<status_id>[\d]+)/(?P<search_key>.+)/$', EmailSearchView.as_view(), name='messaging_email_search'),
     url(r'^search/(?P<account_id>[\d-]+)/(?P<folder>[^/].+)/(?P<search_key>.+)/$', EmailSearchView.as_view(), name='messaging_email_search'),
     url(r'^search/(?P<account_id>[\d-]+)/(?P<folder>[^/].+)/$', EmailSearchView.as_view(), name='messaging_email_search'),
     url(r'^search/(?P<folder>[^/].+)/(?P<search_key>[^/].+)/$', EmailSearchView.as_view(), name='messaging_email_search_all'),

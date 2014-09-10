@@ -282,7 +282,7 @@ class ComposeEmailForm(FormSetFormMixin, HelloLilyModelForm):
         # Make sure at least one of the send_to_X fields is filled in when sending it.
         if 'submit-send' in self.data:
             if not any([cleaned_data.get('send_to_normal'), cleaned_data.get('send_to_cc'), cleaned_data.get('send_to_bcc')]):
-                self._errors["send_to_normal"] = self.error_class([_('Please provide at least one recipient.')])
+                self._errors['send_to_normal'] = self.error_class([_('Please provide at least one recipient.')])
 
         # Clean send_to addresses.
         cleaned_data['send_to_normal'] = self.format_recipients(cleaned_data.get('send_to_normal'))

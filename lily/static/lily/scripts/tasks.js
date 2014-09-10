@@ -29,6 +29,7 @@
                     }
                 });
         },
+            if(response.status != 'STARTED') {
 
         getTaskUri: function (taskId) {
             return this.config.placeholderUrl.replace('000', taskId);

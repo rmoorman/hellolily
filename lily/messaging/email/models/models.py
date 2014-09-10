@@ -27,6 +27,8 @@ def get_attachment_upload_path(instance, filename):
         'filename': filename
     }
 
+from django.core.mail import EmailMessage
+
 
 class EmailProvider(NullableTenantMixin):
     """
@@ -520,6 +522,19 @@ class EmailDraft(TimeStampedModel):
         app_label = 'email'
         verbose_name = _('e-mail draft')
         verbose_name_plural = _('e-mail drafts')
+
+
+class EmailOutboxMessage(models.Model):
+    subject = models.CharField(null=True, blank=True, max_length=255, verbose_name=_('Subject'))
+    from_email = models.TextField(verbose_name=_('From'))
+    to = models.TextField(verbose_name=_('To'))
+    cc = models.TextField(null=True, blank=True, verbose_name=_('Cc'))
+    bcc = models.TextField(null=True, blank=True, verbose_name=_('Bcc'))
+    body = models.TextField(null=True, blank=True, verbose_name=_('Html body'))
+    headers = models.TextField(null=True, blank=True, verbose_name=_('Email headers'))
+
+    class Meta:
+        app_label = 'email'
 
 
 @receiver(post_delete, sender=EmailAttachment)

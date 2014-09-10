@@ -84,6 +84,10 @@
                 {% for task_name, task_id in request.session.tasks.items %}
                     HLTasks.getTaskResponse('{{ task_id }}');
                 {% endfor %}
+            {% if request.session.tasks %}
+                {% for task_name, task_id in request.session.tasks.items %}
+                    get_task_response('{{ task_id }}');
+                {% endfor %}
             {% endif %}
         </script>
     {% endblock %}

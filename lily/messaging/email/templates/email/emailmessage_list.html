@@ -5,7 +5,25 @@
 {% block inbox %}
 <div class="col-md-10 emailmessage-list">
     <div class="inbox-header">
-        <h1 class="pull-left">{{ folder_name }} {% if active_email_address %}<small>{% trans 'in' %} {{ active_email_address }}</small>{% endif %} {% if search_key %}<small>{% blocktrans count counter=page_obj.paginator.count %}with {{ counter }} result for `{{ search_key }}`{% plural %}with {{ counter }} results for `{{ search_key }}`{% endblocktrans %}</small>{% endif %}</h1>
+        <h1 class="pull-left">
+            {% if polling_results %}
+                Searching
+                <small>`{{ folder_name }}`</small>
+            {% else %}
+                {{ folder_name }}
+            {% endif %}
+
+            {% if active_email_address %}
+                <small>{% trans 'in' %} {{ active_email_address }}</small>
+            {% endif %}
+            {% if search_key %}
+                {% if polling_results %}
+                    <small>{% trans 'for' %} `{{ search_key }}`</small>
+                {% else %}
+                    <small>{% blocktrans count counter=page_obj.paginator.count %} with {{ counter }} result for `{{ search_key }}`{% plural %} with {{ counter }} results for `{{ search_key }}`{% endblocktrans %}</small>
+                {% endif %}
+            {% endif %}
+        </h1>
         <form class="form-inline pull-right search-form" method="post" action="{{ search_action_url }}">
             {% csrf_token %}
             <div class="input-group input-medium">
@@ -17,7 +35,7 @@
         </form>
     </div>
     <div class="inbox-loading">
-        <i class="icon-spinner icon-spin"></i> {% trans 'Loading..' %}
+        <i class="icon-spinner icon-spin"></i> {% trans 'Loading...' %}
     </div>
     <div class="inbox-content">
         <table class="table table-striped table-advance table-hover">
@@ -124,7 +142,7 @@
 {{ block.super }}
 <script>
 $(function($) {
-    $('[data-form-submit], #move-messages-form .dropdown-menu a').click(function() {
+    $('[data-form-submit], #move-messages-form .dropdown-menu a').click(function () {
         // waiting for response from server so a redirect will 'unblock' the UI
         if($(this).hasClass('email-list-archive-btn')) {
             // set loading text on archive button when it's clicked
@@ -137,7 +155,7 @@ $(function($) {
         App.blockUI($('.inbox-content'), false, '');
     });
 
-    $('#move-messages-form').closest('li').find('.dropdown-menu a').click(function() {
+    $('#move-messages-form').closest('li').find('.dropdown-menu a').click(function () {
        // waiting for response from server so a redirect will 'unblock' the UI
         $('.mail-actions').button('loading');
         App.blockUI($('.inbox-content'), false, '');
@@ -146,10 +164,43 @@ $(function($) {
         $('#move-messages-form').submit();
     });
 
-    $('.mail-actions .mail-checkbox').click(function(event) {
+    $('.mail-actions .mail-checkbox').click(function (event) {
         // prevent click from activating dropdown
         event.stopPropagation();
     });
+
+    $('.search-form [type="submit"]').click(function (event) {
+        event.preventDefault();
+
+        var search_key = $('input[name="search_key"]').val();
+
+        var jqXHR = $.ajax({
+            url: '{{ search_action_url }}',
+            type: 'GET',
+            dataType: 'json',
+            data: {search_key: search_key}
+        });
+        jqXHR.done(function (response) {
+            get_task_response(response.task_id);
+            // remove request object
+            jqXHR = null;
+        });
+    });
+
+    $(document).on('taskmonitor_email_search', function (event) {
+        if(event.task_result) {
+            redirect_to('{{ search_action_url }}' + event.task_result.status_id + '/' + event.task_result.search_key);
+        }
+        else {
+            toastr.error('{% trans 'There was an error while searching, please try again!' %}', '{% trans 'Oops!' %}');
+            App.unblockUI();
+        }
+    });
+
+    {% if polling_results %}
+        $('.inbox-content').hide();
+        $('.inbox-loading').show();
+    {% endif %}
 });
 </script>
 {% endblock %}
