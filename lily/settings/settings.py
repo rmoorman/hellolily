@@ -265,11 +265,8 @@ INSTALLED_APPS = (
     'south',
     'taskmonitor',
     'injector',
-<<<<<<< HEAD
     'elasticutils',
-=======
     'django_nose',
->>>>>>> cleanup tests
 
     # Lily
     'lily',  # required for management command
@@ -289,6 +286,8 @@ INSTALLED_APPS = (
     'lily.utils',
     'lily.parcels',
     'lily.socialmedia',
+    'lily.google',
+    'lily.google.gmail',
 )
 
 if DEBUG:
@@ -539,8 +538,9 @@ THUMBNAIL_QUALITY = os.environ.get('THUMBNAIL_QUALITY', 85)
 # django-south
 SOUTH_AUTO_FREEZE_APP = True
 SOUTH_VERBOSITY = 1
+# On default, no migrations are tested, run `SOUTH_TESTS_MIGRATE=1 ./manage.py test` to test migrations
+SOUTH_TESTS_MIGRATE = boolean(os.environ.get('SOUTH_TESTS_MIGRATE', 0))
 
 # django-nose
 TEST_RUNNER = 'django_nose.NoseTestSuiteRunner'
-NOSE_ARGS = ['--nocapture',
-             '--nologcapture']
+NOSE_ARGS = ['--nocapture', '--nologcapture']
