@@ -265,7 +265,11 @@ INSTALLED_APPS = (
     'south',
     'taskmonitor',
     'injector',
+<<<<<<< HEAD
     'elasticutils',
+=======
+    'django_nose',
+>>>>>>> cleanup tests
 
     # Lily
     'lily',  # required for management command
@@ -392,7 +396,12 @@ if DEBUG:
             'handlers': ['console'],
             'level': 'DEBUG',
             'propagate': False,
-        }
+        },
+        'factory': {
+            'handlers': ['console'],
+            'level': 'ERROR',
+            'propagate': True,
+        },
     })
 
 #######################################################################################################################
@@ -498,7 +507,13 @@ ES_MODEL_MAPPINGS = (
 )
 
 #######################################################################################################################
-# MISCELLANEOUS SETTINGS                                                                                              #
+## Gmail api settings                                                                                                ##
+#######################################################################################################################
+GA_CLIENT_ID = os.environ.get('GA_CLIENT_ID', '')
+GA_CLIENT_SECRET = os.environ.get('GA_CLIENT_SECRET', '')
+
+#######################################################################################################################
+## MISCELLANEOUS SETTINGS                                                                                            ##
 #######################################################################################################################
 # Registration form
 REGISTRATION_POSSIBLE = boolean(os.environ.get('REGISTRATION_POSSIBLE', 0))
@@ -524,3 +539,8 @@ THUMBNAIL_QUALITY = os.environ.get('THUMBNAIL_QUALITY', 85)
 # django-south
 SOUTH_AUTO_FREEZE_APP = True
 SOUTH_VERBOSITY = 1
+
+# django-nose
+TEST_RUNNER = 'django_nose.NoseTestSuiteRunner'
+NOSE_ARGS = ['--nocapture',
+             '--nologcapture']

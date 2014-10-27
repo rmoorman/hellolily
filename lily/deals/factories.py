@@ -7,6 +7,7 @@ from faker.factory import Factory
 
 from lily.accounts.factories import AccountFactory
 from lily.deals.models import Deal
+from lily.tenant.factories import TenantFactory
 from lily.users.factories import CustomUserFactory
 
 
@@ -14,6 +15,7 @@ faker = Factory.create()
 
 
 class DealFactory(DjangoModelFactory):
+    tenant = SubFactory(TenantFactory)
     name = LazyAttribute(lambda o: faker.word())
     account = SubFactory(AccountFactory, tenant=SelfAttribute('..tenant'))
     amount = FuzzyDecimal(42.7)

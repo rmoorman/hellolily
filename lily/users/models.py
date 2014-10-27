@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.models import User, UserManager
 from django.contrib.auth.signals import user_logged_out
@@ -118,32 +119,8 @@ class CustomUser(User, TenantMixin):
 ## ------------------------------------------------------------------------------------------------
 ## Signal listeners
 ## ------------------------------------------------------------------------------------------------
-
-
-@receiver(pre_save, sender=CustomUser)
-def post_save_customuser_handler(sender, **kwargs):
-    """
-    If an e-mail attribute was set on an instance of CustomUser, add a primary e-mail address or
-    overwrite the existing one.
-    """
-    instance = kwargs['instance']
-    if instance.__dict__.has_key('primary_email'):
-        new_email_address = instance.__dict__['primary_email']
-        if len(new_email_address.strip()) > 0:
-            try:
-                # Overwrite existing primary e-mail address
-                email = instance.contact.email_addresses.get(is_primary=True)
-                email.email_address = new_email_address
-                email.save()
-            except EmailAddress.DoesNotExist:
-                # Add new e-mail address as primary
-                email = EmailAddress(email_address=new_email_address, is_primary=True)
-                add_tenant(email, instance.tenant)
-                email.save()
-                instance.contact.email_addresses.add(email)
-
-
 @receiver(user_logged_out)
 def logged_out_callback(sender, **kwargs):
-    request = kwargs['request']
-    messages.info(request, _('You are now logged out.'))
+    if not settings.DEBUG:
+        request = kwargs['request']
+        messages.info(request, _('You are now logged out.'))

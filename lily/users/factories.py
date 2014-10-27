@@ -7,10 +7,12 @@ from factory.helpers import post_generation
 
 from lily.accounts.factories import AccountFactory
 from lily.contacts.factories import ContactWithEmailFactory
+from lily.tenant.factories import TenantFactory
 from lily.users.models import CustomUser
 
 
 class CustomUserFactory(DjangoModelFactory):
+    tenant = SubFactory(TenantFactory)
     contact = SubFactory(ContactWithEmailFactory, tenant=SelfAttribute('..tenant'))
     account = SubFactory(AccountFactory, tenant=SelfAttribute('..tenant'))
     username = LazyAttribute(lambda o: uuid4().get_hex()[:10])
