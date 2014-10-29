@@ -42,11 +42,11 @@
                 var tags = [];
                 var $this = $(this);
                 if ($this.data('choices')) {
-                    tags = $this.data('choices').split(',');
+                    tags = $this.data('choices');
                 }
                 $this.select2({
                     tags: tags,
-                    tokenSeparators: [",", " "]
+                    tokenSeparators: [',', ' ']
                 });
             });
         },
@@ -62,7 +62,7 @@
                         cache: true,
                         data: function (term, page) { // page is the one-based page number tracked by Select2
                             return {
-                                q: term, //search term
+                                q: term, // search term
                                 page_limit: self.config.ajaxPageLimit, // page size
                                 page: page, // page number
                                 filter: $('#'+$this.data('filter-on')).val()

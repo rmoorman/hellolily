@@ -1,3 +1,4 @@
+import re
 import socket
 
 from django import forms
@@ -245,6 +246,17 @@ class ComposeEmailForm(FormSetFormMixin, HelloLilyModelForm):
 
         # Only provide choices you have access to
         self.fields['send_from'].choices = [(email_account.id, email_account) for email_account in email_accounts]
+        contacts_addresses_qs = Contact.objects.all().prefetch_related('email_addresses')
+
+        known_contact_addresses = []
+        for contact in contacts_addresses_qs:
+            for email_address in contact.email_addresses.all():
+                contact_address = u'"%s" <%s>' % (contact.full_name(), email_address.email_address)
+                known_contact_addresses.append(contact_address)
+
+        self.fields['send_to_normal'].choices = known_contact_addresses
+        self.fields['send_to_cc'].choices = known_contact_addresses
+        self.fields['send_to_bcc'].choices = known_contact_addresses
         self.fields['send_from'].empty_label = None
 
         # Set user's primary_email as default choice if there is no initial value
@@ -272,7 +284,7 @@ class ComposeEmailForm(FormSetFormMixin, HelloLilyModelForm):
         # Make sure at least one of the send_to_X fields is filled in when sending it.
         if 'submit-send' in self.data:
             if not any([cleaned_data.get('send_to_normal'), cleaned_data.get('send_to_cc'), cleaned_data.get('send_to_bcc')]):
-                self._errors["send_to_normal"] = self.error_class([_('Please provide at least one recipient.')])
+                self._errors['send_to_normal'] = self.error_class([_('Please provide at least one recipient.')])
 
         # Clean send_to addresses.
         cleaned_data['send_to_normal'] = self.format_recipients(cleaned_data.get('send_to_normal'))
@@ -293,8 +305,27 @@ class ComposeEmailForm(FormSetFormMixin, HelloLilyModelForm):
         """
         formatted_recipients = []
         for recipient in recipients:
-            formatted_recipients.append(recipient.rstrip(', '))
-        return ', '.join(formatted_recipients)
+            # Clean each part of the string
+            formatted_recipients.append(recipient.rstrip(', ').strip())
+
+        # Create one string from the parts
+        formatted_recipients = ', '.join(formatted_recipients)
+
+        # Regex to split a string by comma while ignoring commas in between quotes
+        pattern = re.compile(r'''((?:[^,"']|"[^"]*"|'[^']*')+)''')
+
+        # Split the single string into separate recipients
+        formatted_recipients = pattern.split(formatted_recipients)[1::2]
+
+        # It's possible that an extra space is added, so strip it
+        formatted_recipients[:] = [recipient.strip() for recipient in formatted_recipients]
+
+        # print formatted_recipients
+        #
+        # import ipdb
+        # ipdb.set_trace()
+
+        return formatted_recipients
 
     def clean_send_from(self):
         """

@@ -1,3 +1,6 @@
+import json
+
+
 from bootstrap3_datetime.widgets import DateTimePicker
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models.query import QuerySet
@@ -46,7 +49,8 @@ class TagInput(TextInput):
     def build_attrs(self, extra_attrs=None, **kwargs):
         extra_attrs = extra_attrs or {}
         extra_attrs.update({
-            'data-choices': ','.join(self.choices),
+            # Select2 splits by comma, so serialize data instead
+            'data-choices': json.dumps(self.choices),
         })
 
         if 'class' not in kwargs:

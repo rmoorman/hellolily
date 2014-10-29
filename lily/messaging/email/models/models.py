@@ -223,7 +223,6 @@ class EmailMessage(Message):
         return self._subject_header
 
     def to_emails(self, include_names=True, include_self=False):
-        headers = None
         if hasattr(self, '_to_headers'):
             headers = self._to_headers
         else:
