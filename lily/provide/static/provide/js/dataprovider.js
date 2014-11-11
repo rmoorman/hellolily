@@ -8,8 +8,10 @@
             dataProviderClass: '.dataprovider',
             errorHeader: 'Oops!',
             errorText: 'There was an error trying to fetch your data, please don\'t be mad.',
-            successText: 'We did it! Your new data should be right there waiting for you.',
             successHeader: 'Yeah!',
+            successText: 'We did it! Your new data should be right there waiting for you.',
+            hiddenSuccessHeader: 'Psst!',
+            hiddenSuccessText: 'Did you know I did more work in the background? ;)',
             overwriteConfirmHeader: 'Do you wish to overwrite the following fields?\n',
             fields: [
                 'name',
@@ -113,8 +115,10 @@
 
         loopTroughFields: function(fields, $form, data) {
             var self = this,
+                cf = self.config,
                 checkOverwriteFields = [],
-                checkOverwriteLabels = [];
+                checkOverwriteLabels = [],
+                filledHiddenField = false;
 
             // Loop through all fields
             fields.forEach(function(field) {
@@ -123,6 +127,9 @@
                 // Always clear the field if it's hidden
                 if ($input.attr('type') == 'hidden' || $input.parent().hasClass('hide')) {
                     $input.val('');
+                    if (data[field]) {
+                        filledHiddenField = true;
+                    }
                 }
                 // Check if there is data for the field, else do nothing
                 if (data[field]) {
@@ -142,6 +149,10 @@
                     }
                 }
             });
+
+            if (filledHiddenField === true) {
+                toastr.success(cf.hiddenSuccessText, cf.hiddenSuccessHeader);
+            }
 
             return [checkOverwriteFields, checkOverwriteLabels];
         },
