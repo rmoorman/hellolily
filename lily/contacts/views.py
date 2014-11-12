@@ -1,4 +1,5 @@
 import base64
+import json
 import pickle
 from datetime import date
 from hashlib import sha256
@@ -219,8 +220,49 @@ class JsonContactListView(LoginRequiredMixin, JsonListView):
     filter_on_field = 'functions__account__id'
 
     def get_queryset(self):
+        import ipdb
+        ipdb.set_trace()
         queryset = super(JsonContactListView, self).get_queryset()
         return queryset.filter(is_deleted=False)
+
+
+class JsonRecipientListView(JsonContactListView):
+    # FilterQuerysetMixin
+    search_fields = [
+        'first_name__icontains',
+        'last_name__icontains',
+        'preposition__icontains',
+        'email_addresses__email_address__icontains',
+    ]
+
+    """
+    Return json response with paginated object results and total queryset count.
+    Overwrite this function so it's more useful for email address input.
+
+    Arguments:
+        context (dict): Dict containing context variables.
+        response_kwargs (dict): Arguments that will be passed to the constructor of the response class.
+
+    Returns:
+        JSON response with paginated object results and total queryset count.
+    """
+    def render_to_response(self, context, **response_kwargs):
+        contacts = []
+        for contact in context['object_list']:
+            for email_address in contact.email_addresses.all():
+                # The text which is actually used in the application
+                used_text = u'"%s" <%s>' % (str(contact), email_address.email_address)
+                # The displayed text
+                displayed_text = u'%s <%s>' % (str(contact), email_address.email_address)
+
+                contacts.append({'id': used_text, 'text': displayed_text})
+
+        response = json.dumps({
+            'objects': contacts,
+            'total': self._total
+        })
+
+        return HttpResponse(response, content_type='application/javascript')
 
 
 class DetailContactView(LoginRequiredMixin, HistoryListViewMixin):

@@ -1,13 +1,16 @@
+import re
 import socket
 
 from django import forms
 from django.core.exceptions import ValidationError
+from django.core.urlresolvers import reverse_lazy
 from django.db.models import Q
 from django.forms.models import modelformset_factory
 from django.forms.widgets import RadioSelect, SelectMultiple
 from django.template.defaultfilters import linebreaksbr
 from django.utils.translation import ugettext as _
 
+from lily.contacts.models import Contact
 from lily.messaging.email.models import EmailProvider, EmailAccount, EmailTemplate, EmailDraft, EmailAttachment, \
     EmailOutboxAttachment
 from lily.messaging.email.utils import get_email_parameter_choices, TemplateParser, verify_imap_credentials, \
@@ -18,7 +21,7 @@ from lily.users.models import CustomUser
 from lily.utils.forms import HelloLilyForm, HelloLilyModelForm
 from lily.utils.forms.fields import TagsField, HostnameField, FormSetField
 from lily.utils.forms.mixins import FormSetFormMixin
-from lily.utils.forms.widgets import ShowHideWidget, BootstrapRadioFieldRenderer
+from lily.utils.forms.widgets import ShowHideWidget, BootstrapRadioFieldRenderer, AjaxSelect2Widget
 
 
 class EmailConfigurationWizard_1(HelloLilyForm):
@@ -223,9 +226,43 @@ class ComposeEmailForm(FormSetFormMixin, HelloLilyModelForm):
         empty_label=_('Choose a template'),
         required=False
     )
-    send_to_normal = TagsField(label=_('To'))
-    send_to_cc = TagsField(required=False, label=_('Cc'))
-    send_to_bcc = TagsField(required=False, label=_('Bcc'))
+
+    send_to_normal = TagsField(
+        label=_('To'),
+        widget=AjaxSelect2Widget(
+            attrs={
+                'class': 'tags-ajax'
+            },
+            url=reverse_lazy('json_recipient_list'),
+            model=Contact,
+            filter_on='id_account',
+        ),
+    )
+    send_to_cc = TagsField(
+        label=_('Cc'),
+        required=False,
+        widget=AjaxSelect2Widget(
+            attrs={
+                'class': 'tags-ajax'
+            },
+            url=reverse_lazy('json_recipient_list'),
+            model=Contact,
+            filter_on='id_account',
+        ),
+    )
+    send_to_bcc = TagsField(
+        label=_('Bcc'),
+        required=False,
+        widget=AjaxSelect2Widget(
+            attrs={
+                'class': 'tags-ajax'
+            },
+            url=reverse_lazy('json_recipient_list'),
+            model=Contact,
+            filter_on='id_account',
+        ),
+    )
+
     attachments = FormSetField(
         queryset=EmailOutboxAttachment.objects,
         formset_class=modelformset_factory(EmailOutboxAttachment, form=AttachmentBaseForm, can_delete=True, extra=0),
@@ -272,7 +309,7 @@ class ComposeEmailForm(FormSetFormMixin, HelloLilyModelForm):
         # Make sure at least one of the send_to_X fields is filled in when sending it.
         if 'submit-send' in self.data:
             if not any([cleaned_data.get('send_to_normal'), cleaned_data.get('send_to_cc'), cleaned_data.get('send_to_bcc')]):
-                self._errors["send_to_normal"] = self.error_class([_('Please provide at least one recipient.')])
+                self._errors['send_to_normal'] = self.error_class([_('Please provide at least one recipient.')])
 
         # Clean send_to addresses.
         cleaned_data['send_to_normal'] = self.format_recipients(cleaned_data.get('send_to_normal'))
@@ -284,17 +321,29 @@ class ComposeEmailForm(FormSetFormMixin, HelloLilyModelForm):
     def format_recipients(self, recipients):
         """
         Strips newlines and trailing spaces & commas from recipients.
-
         Args:
             recipients (str): The string that needs cleaning up.
-
         Returns:
             String of comma separated email addresses.
         """
         formatted_recipients = []
         for recipient in recipients:
-            formatted_recipients.append(recipient.rstrip(', '))
-        return ', '.join(formatted_recipients)
+            # Clean each part of the string
+            formatted_recipients.append(recipient.rstrip(', ').strip())
+
+        # Create one string from the parts
+        formatted_recipients = ', '.join(formatted_recipients)
+
+        # Regex to split a string by comma while ignoring commas in between quotes
+        pattern = re.compile(r'''((?:[^,"']|"[^"]*"|'[^']*')+)''')
+
+        # Split the single string into separate recipients
+        formatted_recipients = pattern.split(formatted_recipients)[1::2]
+
+        # It's possible that an extra space is added, so strip it
+        formatted_recipients[:] = [recipient.strip() for recipient in formatted_recipients]
+
+        return formatted_recipients
 
     def clean_send_from(self):
         """

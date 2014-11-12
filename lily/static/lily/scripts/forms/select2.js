@@ -56,7 +56,7 @@
             var self = this;
             $(self.config.ajaxInputs).each(function() {
                 var $this = $(this);
-                $this.select2({
+                var options = {
                     ajax: {
                         quietMillis: 300,
                         cache: true,
@@ -71,13 +71,13 @@
                         results: function (data, page) {
                             var more = (page * self.config.ajaxPageLimit) < data.total; // whether or not there are more results available
                             // Add clear option
-                            if (page == 1) {
-                                data.objects.unshift({id: -1, text:self.config.clearText});
+                            if (page == 1 && !$this.hasClass('tags-ajax')) {
+                                data.objects.unshift({id: -1, text: self.config.clearText});
                             }
                             return {
                                 results: data.objects,
                                 more: more
-                            }
+                            };
                         }
                     },
                     initSelection: function (item, callback) {
@@ -86,7 +86,25 @@
                         var data = { id: id, text: text };
                         callback(data);
                     }
-                });
+                };
+
+                if ($this.hasClass('tags-ajax')) {
+                    options.tags = true;
+                    options.tokenSeparators = [',', ' '];
+                    // Create a new tag if there were no results
+                    options.createSearchChoice = function (term, data) {
+                        if ($(data).filter(function () {
+                            return this.text.localeCompare(term) === 0;
+                        }).length === 0) {
+                            return {
+                                id: term,
+                                text: term
+                            };
+                        }
+                    }
+                }
+
+                $this.select2(options);
             });
         }
     };
